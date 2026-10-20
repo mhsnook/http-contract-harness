@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Portside</title>
+    <style>
+      :root {
+        --bg: #fbfbfa;
+        --panel: #ffffff;
+        --ink: #1d1d1b;
+        --muted: #6b6b66;
+        --line: #e6e5e1;
+        --pass: #1f7a4d;
+        --pass-bg: #e6f4ec;
+        --warn: #8a5a00;
+        --warn-bg: #fdf2dc;
+        --fail: #b42318;
+        --fail-bg: #fde8e6;
+        --unknown: #8a8a84;
+        --unknown-bg: #f1f1ef;
+        --accent: #2457c5;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #141413;
+          --panel: #1c1c1a;
+          --ink: #ecebe6;
+          --muted: #9c9b94;
+          --line: #2e2d2a;
+          --pass: #5fd09a;
+          --pass-bg: #163325;
+          --warn: #f0bf5a;
+          --warn-bg: #3a2d10;
+          --fail: #ff8a7d;
+          --fail-bg: #3d1a16;
+          --unknown: #8f8e87;
+          --unknown-bg: #262624;
+          --accent: #8db0ff;
+          color-scheme: dark;
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #141413;
+        --panel: #1c1c1a;
+        --ink: #ecebe6;
+        --muted: #9c9b94;
+        --line: #2e2d2a;
+        --pass: #5fd09a;
+        --pass-bg: #163325;
+        --warn: #f0bf5a;
+        --warn-bg: #3a2d10;
+        --fail: #ff8a7d;
+        --fail-bg: #3d1a16;
+        --unknown: #8f8e87;
+        --unknown-bg: #262624;
+        --accent: #8db0ff;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.45 ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 12.5px;
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 24px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        position: sticky;
+        top: 0;
+        z-index: 2;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0;
+        letter-spacing: -0.01em;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      main {
+        padding: 16px;
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+      button,
+      select,
+      input {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 5px 10px;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--muted);
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--panel);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      input,
+      select {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 5px 8px;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .targets {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+      }
+      .card h2 {
+        font-size: 14px;
+        margin: 0 0 2px;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .counts {
+        display: flex;
+        gap: 10px;
+        margin: 8px 0;
+        font-variant-numeric: tabular-nums;
+      }
+      .bar {
+        display: flex;
+        height: 6px;
+        border-radius: 3px;
+        overflow: hidden;
+        background: var(--unknown-bg);
+      }
+      .bar span {
+        display: block;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 7px;
+        border-radius: 999px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .pass {
+        color: var(--pass);
+      }
+      .pill.pass,
+      .bg-pass {
+        background: var(--pass-bg);
+      }
+      .warn {
+        color: var(--warn);
+      }
+      .pill.warn,
+      .bg-warn {
+        background: var(--warn-bg);
+      }
+      .fail {
+        color: var(--fail);
+      }
+      .pill.fail,
+      .bg-fail {
+        background: var(--fail-bg);
+      }
+      .unknown {
+        color: var(--unknown);
+      }
+      .pill.unknown,
+      .bg-unknown {
+        background: var(--unknown-bg);
+      }
+      .table-wrap {
+        overflow-x: auto;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      th {
+        font-weight: 500;
+        color: var(--muted);
+        font-size: 12px;
+        position: sticky;
+        top: 0;
+        background: var(--panel);
+      }
+      tr.route {
+        cursor: pointer;
+      }
+      tr.route:hover td {
+        background: color-mix(in srgb, var(--line) 35%, transparent);
+      }
+      td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+      }
+      .cell {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 170px;
+      }
+      .why {
+        color: var(--muted);
+        font-size: 12px;
+        max-width: 280px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .detail td {
+        background: var(--bg);
+      }
+      .case {
+        margin: 6px 0 14px;
+      }
+      .case h3 {
+        font-size: 13px;
+        margin: 0 0 6px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 10px;
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: 70px 1fr;
+        gap: 2px 8px;
+        font-size: 12.5px;
+      }
+      .kv dt {
+        color: var(--muted);
+      }
+      .kv dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .progress {
+        min-width: 220px;
+      }
+      .progress .bar span {
+        background: var(--accent);
+        transition: width 0.2s;
+      }
+      .history {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .empty {
+        padding: 32px;
+        text-align: center;
+        color: var(--muted);
+      }
+      .problem {
+        background: var(--fail-bg);
+        color: var(--fail);
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin-bottom: 12px;
+        display: none;
+      }
+      @media (max-width: 640px) {
+        header {
+          position: static;
+        }
+        .why {
+          max-width: 160px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Portside</h1>
+        <div class="sub" id="root"></div>
+      </div>
+      <div class="toolbar">
+        <div class="progress" id="progress" hidden>
+          <div class="sub" id="progress-text"></div>
+          <div class="bar"><span id="progress-bar" style="width: 0"></span></div>
+        </div>
+        <input id="label" placeholder="run label (optional)" size="16" aria-label="Run label" />
+        <button class="primary" id="run-all">Run every target</button>
+        <button id="ratchet" title="Tighten every lock a target now beats">Ratchet</button>
+      </div>
+    </header>
+    <main>
+      <div class="problem" id="problem"></div>
+      <section class="targets" id="targets"></section>
+      <div class="toolbar" style="margin-bottom: 10px">
+        <input
+          id="filter"
+          placeholder="Filter routes"
+          aria-label="Filter routes"
+          style="flex: 1; min-width: 160px"
+        />
+        <select id="state" aria-label="Show">
+          <option value="attention">Needs attention</option>
+          <option value="all">Every route</option>
+          <option value="fail">Failing</option>
+          <option value="unknown">Not judged yet</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead id="head"></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const esc = (s) =>
+        String(s ?? "").replace(
+          /[&<>"]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+        )
+      const ms = (n) => (n == null ? "–" : Math.round(n) + "ms")
+      const GLYPH = { pass: "✓", warn: "!", fail: "✗", unknown: "·" }
+      let state = null
+      const open = new Set()
+
+      function store(key, value) {
+        try {
+          localStorage.setItem(key, value)
+        } catch {}
+      }
+      function load(key) {
+        try {
+          return localStorage.getItem(key)
+        } catch {
+          return null
+        }
+      }
+
+      function reason(c) {
+        if (!c.observed) return "not run"
+        if (c.reference === "none") return "unlocked"
+        const d = c.contract.diffs.find((d) => !d.allowed)
+        if (c.contract.state === "fail" && d)
+          return d.field === "error"
+            ? "error: " + d.actual
+            : `${d.field}: ${d.expected ?? "∅"} → ${d.actual ?? "∅"}`
+        if (c.perf.state === "fail" || c.perf.state === "warn")
+          return c.perf.call !== "worse"
+            ? `median ${ms(c.perf.actual?.median)} > max ${ms(c.perf.max)}`
+            : `slower${c.perf.against ? " than " + c.perf.against : ""}: ${ms(c.perf.baseline?.median)} → ${ms(c.perf.actual?.median)}${c.perf.paired === false ? " (another run)" : ""}`
+        if (c.cache.state === "warn" || c.cache.state === "fail")
+          return `${c.cache.expected} → ${c.cache.actual}`
+        return ""
+      }
+
+      function worstCase(route) {
+        for (const s of ["fail", "warn", "pass", "unknown"]) {
+          const c = route.cases.find((c) => c.state === s)
+          if (c) return c
+        }
+      }
+
+      function renderTargets() {
+        $("targets").innerHTML = state.status
+          .map(({ target, evaluation: e }) => {
+            const t = state.project.targets.find((x) => x.name === target)
+            const total = Object.values(e.counts).reduce((a, b) => a + b, 0) || 1
+            const seg = (k) =>
+              `<span class="bg-${k}" style="width:${(e.counts[k] / total) * 100}%;background:var(--${k})"></span>`
+            const last = state.runs.find((r) => r.target === target)
+            return `<div class="card">
+      <h2><span>${esc(target)}${target === state.project.baseline ? ' <span class="pill unknown">baseline</span>' : ""}</span>
+      <button data-run="${esc(target)}">Run</button></h2>
+      <div class="sub mono">${esc(t?.url)}</div>
+      <div class="counts"><span class="pass">${e.counts.pass} pass</span><span class="warn">${e.counts.warn} warn</span><span class="fail">${e.counts.fail} fail</span><span class="unknown">${e.counts.unknown} unknown</span></div>
+      <div class="bar">${["pass", "warn", "fail", "unknown"].map(seg).join("")}</div>
+      <div class="sub" style="margin-top:6px">${last ? `last run #${last.id}${last.label ? "@" + esc(last.label) : ""} · ${new Date(last.startedAt).toLocaleString()}${last.gitSha ? " · " + esc(last.gitSha) : ""}` : "never run"}
+      ${target === state.project.baseline ? ` · <a href="#" data-lock="${esc(target)}">lock unlocked cases from here</a>` : ""}</div>
+    </div>`
+          })
+          .join("")
+      }
+
+      function rows() {
+        const byTarget = state.status.map(({ target, evaluation }) => ({
+          target,
+          map: new Map(evaluation.routes.map((r) => [r.route, r])),
+        }))
+        const routes = new Map()
+        for (const { evaluation } of state.status)
+          for (const r of evaluation.routes) if (!routes.has(r.route)) routes.set(r.route, r)
+        const filter = $("filter").value.trim().toLowerCase()
+        const mode = $("state").value
+        return [...routes.values()]
+          .map((r) => ({ route: r, cells: byTarget.map((t) => t.map.get(r.route)) }))
+          .filter(({ route, cells }) => {
+            if (filter && !route.route.toLowerCase().includes(filter)) return false
+            if (mode === "all") return true
+            if (mode === "fail") return cells.some((c) => c?.state === "fail")
+            if (mode === "unknown") return cells.some((c) => c?.state === "unknown")
+            return cells.some((c) => c && c.state !== "pass")
+          })
+          .sort(
+            (a, b) => b.route.weight - a.route.weight || a.route.route.localeCompare(b.route.route),
+          )
+      }
+
+      function renderTable() {
+        $("head").innerHTML =
+          `<tr><th>Route</th><th style="text-align:right">Weight</th><th>Declared</th>${state.status.map((s) => `<th>${esc(s.target)}</th>`).join("")}</tr>`
+        const list = rows()
+        if (list.length === 0) {
+          const none = state.status[0]?.evaluation.routes.length === 0
+          $("rows").innerHTML =
+            `<tr><td class="empty" colspan="${3 + state.status.length}">${none ? "No routes in the lock yet. Run <code>portside discover</code>." : "Nothing needs attention with this filter."}</td></tr>`
+          return
+        }
+        $("rows").innerHTML = list
+          .map(({ route, cells }) => {
+            const declared = route.declared
+              ? `${route.declared.mode}${route.declared.revalidate ? " " + route.declared.revalidate + "s" : ""}`
+              : ""
+            const tds = cells
+              .map((r) => {
+                if (!r) return "<td>–</td>"
+                const c = worstCase(r)
+                const p75 = Math.max(0, ...r.cases.map((x) => x.perf.actual?.p75 ?? 0)) || null
+                const tag =
+                  r.cases.length > 1 && c && c.state !== "pass" ? "#" + c.caseId + " " : ""
+                const why = r.samples === 0 ? "no sample" : tag + reason(c)
+                return `<td><div class="cell"><span><span class="pill ${r.state}">${GLYPH[r.state]} ${r.state}</span> <span class="mono sub">${ms(p75)}</span></span><span class="why" title="${esc(why)}">${esc(why)}</span></div></td>`
+              })
+              .join("")
+            const row = `<tr class="route" data-route="${esc(route.route)}"><td class="mono">${esc(route.route)}</td><td class="num">${route.weight}</td><td class="sub">${esc(declared)}</td>${tds}</tr>`
+            return row + (open.has(route.route) ? detail(route.route) : "")
+          })
+          .join("")
+      }
+
+      function detail(pattern) {
+        const caseIds = [
+          ...new Set(
+            state.status.flatMap(
+              (s) =>
+                s.evaluation.routes.find((r) => r.route === pattern)?.cases.map((c) => c.caseId) ??
+                [],
+            ),
+          ),
+        ]
+        const body = caseIds
+          .map((id) => {
+            const per = state.status.map(({ target, evaluation }) => [
+              target,
+              evaluation.routes
+                .find((r) => r.route === pattern)
+                ?.cases.find((c) => c.caseId === id),
+            ])
+            const key = per.find(([, c]) => c)?.[1]?.key
+            return `<div class="case"><h3 class="mono">#${esc(id)} <button data-lock-case="${esc(key)}" style="font-size:12px;padding:2px 8px">Re-lock from baseline…</button></h3><div class="grid">${per
+              .map(([target, c]) => {
+                if (!c) return ""
+                const diffs = c.contract.diffs
+                  .map(
+                    (d) =>
+                      `<div class="${d.allowed ? "unknown" : "fail"}"><code>${esc(d.field)}</code> ${esc(d.expected ?? "∅")} → ${esc(d.actual ?? "∅")}${d.allowed ? " (allowed: " + esc(d.allowed) + ")" : ""} <span class="sub">${esc(d.sample)}</span></div>`,
+                  )
+                  .join("")
+                const a = c.perf.actual
+                return `<div class="card"><h2><span>${esc(target)}</span><span class="pill ${c.state}">${GLYPH[c.state]} ${c.state}</span></h2>
+        <div class="sub">against ${esc(c.reference)}</div>
+        <dl class="kv" style="margin-top:8px">
+          <dt>contract</dt><dd class="${c.contract.state}">${c.contract.state}${diffs ? "" : c.observed ? " · every field matches" : ""}</dd>
+          ${diffs ? `<dt></dt><dd>${diffs}</dd>` : ""}
+          <dt>cache</dt><dd class="${c.cache.state}">${esc(c.cache.expected ?? "∅")} → ${esc(c.cache.actual)}<div class="sub">${esc(c.cache.signal ?? "")}${c.cache.note ? " · " + esc(c.cache.note) : ""}</div></dd>
+          <dt>ttfb</dt><dd class="${c.perf.state}">${a ? `median ${ms(a.median)} · p75 ${ms(a.p75)} · n=${a.n}` : "–"}<div class="sub">${c.perf.baseline ? `${esc(c.perf.against ?? "reference")}${c.perf.paired ? " (same batch)" : c.perf.paired === false ? " (another run)" : ""}: median ${ms(c.perf.baseline.median)} · p75 ${ms(c.perf.baseline.p75)} · ${c.perf.call}` : ""}${c.perf.max != null ? ` · max median ${ms(c.perf.max)}` : ""}${c.perf.note ? `<br>${esc(c.perf.note)}` : ""}</div></dd>
+        </dl></div>`
+              })
+              .join("")}</div></div>`
+          })
+          .join("")
+        return `<tr class="detail"><td colspan="${3 + state.status.length}">${body}</td></tr>`
+      }
+
+      function render() {
+        $("root").textContent = state.project.root
+        renderTargets()
+        renderTable()
+        const r = state.running
+        $("progress").hidden = !r
+        $("run-all").disabled = Boolean(r)
+        if (r) progress(r)
+      }
+
+      function progress(r) {
+        $("progress").hidden = false
+        $("progress-text").textContent =
+          `Running ${r.targets.join(" + ")}${r.label ? " @" + r.label : ""}: ${r.done}/${r.total || "…"}`
+        $("progress-bar").style.width = r.total ? (r.done / r.total) * 100 + "%" : "0"
+      }
+
+      let pending = null
+      async function refresh() {
+        clearTimeout(pending)
+        pending = setTimeout(async () => {
+          const res = await fetch("/api/state")
+          state = await res.json()
+          render()
+        }, 120)
+      }
+
+      async function post(path, body) {
+        const res = await fetch(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body ?? {}),
+        })
+        const json = await res.json()
+        if (!res.ok) problem(json.error)
+        return json
+      }
+
+      function problem(message) {
+        $("problem").textContent = message
+        $("problem").style.display = message ? "block" : "none"
+      }
+
+      document.addEventListener("click", async (event) => {
+        const el = event.target.closest(
+          "[data-run],[data-lock],[data-lock-case],tr.route,#run-all,#ratchet",
+        )
+        if (!el) return
+        const label = $("label").value.trim()
+        if (el.id === "run-all") return post("/api/run", { label })
+        if (el.id === "ratchet") {
+          const changes = await post("/api/ratchet", {})
+          problem("")
+          return alert(
+            changes.length
+              ? `Tightened ${changes.length}:\n` +
+                  changes.map((c) => `${c.key} ${c.field}: ${c.from ?? "∅"} → ${c.to}`).join("\n")
+              : "No target beats any lock yet.",
+          )
+        }
+        if (el.dataset.run) {
+          event.stopPropagation()
+          return post("/api/run", { targets: [el.dataset.run], label })
+        }
+        if (el.dataset.lock) {
+          event.preventDefault()
+          const changes = await post("/api/lock", { from: el.dataset.lock })
+          return alert(`Locked ${changes.filter((c) => !c.skipped).length} cases.`)
+        }
+        if (el.dataset.lockCase) {
+          event.stopPropagation()
+          const why = prompt(`Re-lock ${el.dataset.lockCase} from ${state.project.baseline}. Why?`)
+          if (why)
+            await post("/api/lock", {
+              from: state.project.baseline,
+              keys: [el.dataset.lockCase],
+              force: true,
+              reason: why,
+            })
+          return
+        }
+        if (el.matches("tr.route")) {
+          const r = el.dataset.route
+          open.has(r) ? open.delete(r) : open.add(r)
+          renderTable()
+        }
+      })
+      $("filter").addEventListener("input", () => {
+        store("portside:filter", $("filter").value)
+        renderTable()
+      })
+      $("state").addEventListener("change", () => {
+        store("portside:state", $("state").value)
+        renderTable()
+      })
+      $("filter").value = load("portside:filter") ?? ""
+      $("state").value = load("portside:state") ?? "attention"
+
+      const stream = new EventSource("/api/stream")
+      stream.addEventListener("change", refresh)
+      stream.addEventListener("hello", refresh)
+      stream.addEventListener("progress", (e) => progress(JSON.parse(e.data)))
+      stream.addEventListener("problem", (e) => problem(JSON.parse(e.data).message))
+      refresh()
+    </script>
+  </body>
+</html>
