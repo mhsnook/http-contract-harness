@@ -190,6 +190,80 @@ nothing, so the list does not outlive the differences it describes.
 ]
 ```
 
+### Directions
+
+A reader reaches a route in more than one way, and a port can be fast in one and slow in another.
+Each case has a direction, `hit` unless it says otherwise:
+
+| Direction    | What it measures                                                              | Primary metric                            |
+| ------------ | ----------------------------------------------------------------------------- | ----------------------------------------- |
+| `hit`        | The same URL requested repeatedly, the way a warm cache answers it            | time to first byte                        |
+| `revalidate` | A conditional request with the ETag or Last-Modified the first answer carried | time to first byte                        |
+| `cold`       | The target's `purge` command, then one request, for every repeat              | time to first byte                        |
+| `load`       | A fresh browser loading the page                                              | LCP, else `load`                          |
+| `reload`     | The same browser loading it again, with its cache warm                        | LCP, else `load`                          |
+| `navigate`   | A browser on `from` clicking the link to the route                            | the navigation's own response, or `ready` |
+| `scene`      | A command of your own, such as a Playwright spec or a scenetest scene         | what it reports                           |
+
+```sh
+portside probe /event/:city/:id --direction hit,revalidate,cold,load,navigate --from /
+```
+
+`probe` adds a case for each direction the route lacks and measures that route on every target at
+once. `case add --direction` adds one at a time.
+
+**Cold** requests need a purge, because a cache-busting query string is not a cold request: vinext,
+for one, leaves the query out of its page-cache key. Give each target a `purge` command, run with
+`PORTSIDE_URL`, `PORTSIDE_PATH` and `PORTSIDE_TARGET` set, such as a call to your app's own
+revalidation endpoint. Portside then checks the cache header on the answer: a request the cache
+still answered is not counted as cold, and a route whose purge never takes reports that instead of
+a number.
+
+**Browser** directions need `playwright-core`, which portside loads only when a case asks for a
+browser. Set `browser.executablePath` in the config, or `PORTSIDE_CHROMIUM`, to use a Chromium you
+already have. Only the target's own requests decide when a page has settled, so a slow analytics
+host does not count against the site. `navigate` ends when the framework's own response for the new
+page has arrived, or when the case's `ready` selector shows, not when the network goes quiet: a
+page may start an idle prefetch right after it renders. It also records `soft`, which is 0 when the
+click loaded a whole document, as it does on a page that never hydrated, and `prefetched`.
+
+A target's `headers` reach the browser only on the target's own origin, so a bypass secret never
+goes to a third party, but intercepting requests to add them turns the browser's cache off. A
+target's `cookies` are scoped to its domain by the browser itself and leave the cache alone, so a
+WAF rule that matches a cookie is the better bypass for `reload`.
+
+**Scenes** are named in the config:
+
+```json
+"scenes": {
+  "search": { "command": "pnpm exec playwright test e2e/search.spec.ts", "primary": "durationMs", "repeats": 3 }
+}
+```
+
+The command runs once per repeat per target, with `PORTSIDE_BASE_URL`, `PORTSIDE_TARGET` and
+`PORTSIDE_PATH` set. It may write a JSON object of numbers to the file `PORTSIDE_METRICS` names.
+`primary` picks the one the timing verdict reads; `durationMs`, the wall time, is always there.
+
+### Experiments
+
+An experiment is one theory, tried on a few routes, kept or thrown away, and written down so nobody
+tries it twice. The ledger is `portside.experiments.json`, and it is committed.
+
+```sh
+portside experiment start "Cache the event page for 60s at the edge" --route /event --target port
+# make the one change and deploy it
+portside experiment measure 2026-10-21-cache-the-event-page-for-60s-at-the-edge
+portside experiment decide 2026-10-21-cache-the-event-page-for-60s-at-the-edge keep \
+  --why "TTFB 140ms faster, and events stay fresh enough at 60s"
+```
+
+`start` lists every experiment already tried on those routes, with its decision and reason, then
+measures a before batch: the target and a reference, usually the baseline, interleaved. `measure`
+takes an after batch the same way. The two batches are minutes apart, so the reference, which the
+experiment did not touch, measures the drift between them, and each case's change is corrected by
+it before it is called better, worse or noise. `measure` also checks the after batch against the
+lock, and `decide … keep` refuses an experiment that broke the contract on any case.
+
 ## Commands
 
 | Command                                        | What it does                                                  |
@@ -206,11 +280,50 @@ nothing, so the list does not outlive the differences it describes.
 | `compare <before> <after>`                     | Two runs or targets head to head: `12`, `port`, `port@isr-60` |
 | `lock [--from T] [--route P]… [--case K]…`     | Write expectations from a target's latest observations        |
 | `ratchet [--dry-run]`                          | Tighten every lock a target now beats                         |
+| `probe <route> --direction D,…`                | Add direction cases to a route and measure it now             |
+| `experiment start "<theory>" --route P…`       | Show what was tried there, then measure a before batch        |
+| `experiment measure <id>`                      | Measure the after batch, corrected for drift                  |
+| `experiment decide <id> keep\|discard --why …` | Write the decision down                                       |
+| `experiment list` / `experiment show <id>`     | The ledger                                                    |
 | `loosen <route#case> --reason …`               | Lower a bar by hand: `--ttfb`, `--cache`, `--drop`, `--set`   |
 | `serve [--port 4800]`                          | The dashboard, which updates as runs and locks land           |
 | `guide`                                        | Instructions for an agent driving portside                    |
 
 Every command takes `--json`. `status --gate` exits 1 when any route fails.
+
+## Live sites
+
+The targets can be any URLs. The loop is most useful against two production-like deployments side
+by side: `www.` on the current platform and `port.` on the new one, each with its own CDN settings,
+behind the same WAF rules. Portside then measures what readers would get, CDN, WAF and the distance
+to the data included, rather than what a framework does on localhost.
+
+- Run from a machine near your readers, and from the same machine every time. Timings say how the
+  two sites compare from there.
+- The WAF has to let the probe through on both sites. Use the same bypass on both, a header for the
+  HTTP directions and a cookie for the browser ones, so neither site takes a different path
+  through it.
+- Purging `www.` to measure cold requests makes the next real reader's request cold too. Keep cold
+  cases to the routes you are working on.
+- Portside only makes `GET` requests: six per case by default, four cases at a time. Lower
+  `probe.concurrency` if that is more than a production site should take from one client.
+
+### Platform observability
+
+Both platforms report what real readers got, which no probe from one machine can. Portside does not
+read them yet. This is what each offers, checked on 2026-10-21:
+
+- **Vercel**: `vercel metrics` queries request, function and Speed Insights metrics, such as
+  `vercel.function_invocation.ttfb_ms` and `vercel.speed_insights.lcp_ms`, filtered and grouped by
+  dimensions such as `requestPath`, with `--format json`. Metrics other than Web Analytics and
+  Speed Insights need Observability Plus. `vercel logs requests --json` lists CDN request records,
+  with fields such as `cacheResult`.
+- **Cloudflare**: the Workers Observability API queries invocation telemetry, such as CPU time,
+  request path, status and country, with percentiles, kept for seven days once `observability` is
+  enabled in the Wrangler config. The zone's GraphQL Analytics API (`httpRequestsAdaptiveGroups`)
+  has `edgeTimeToFirstByteMs` quantiles and `cacheStatus` per path, on Pro plans and up.
+
+The `port.` site only has real readers once some traffic is sent to it.
 
 ## The dashboard
 
@@ -241,8 +354,8 @@ into its instructions.
 
 ## Limits
 
-- Timing is time to first byte from where portside runs. It says nothing about rendering in the
-  browser; use Lighthouse or a browser trace for that.
+- Timing is measured from where portside runs. The browser directions measure one Chromium on one
+  machine, not your readers' devices.
 - Cache detection is a best effort without a hit header or a `renderStamp`. A route that reads
   `unknown` is not judged on caching.
 - Pattern inference from a sitemap is a starting point. A framework's route table is better.

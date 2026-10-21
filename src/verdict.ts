@@ -39,6 +39,7 @@ export type CaseVerdict = {
     paired?: boolean
     call?: PerfCall
     max?: number
+    metric?: string
     note?: string
   }
 }
@@ -66,8 +67,10 @@ export function worst(states: State[]): State {
   return seen.reduce((a, b) => (RANK[b] > RANK[a] ? b : a))
 }
 
-/** Timings after the first request, which may be the one that filled a cache. */
-export const warmTimings = (o: Observation) => (o.ttfb.length > 1 ? o.ttfb.slice(1) : o.ttfb)
+// Only a hit's first request may have filled a cache: cold, revalidating, browser and scene samples
+// each stand on their own.
+export const warmTimings = (o: Observation) =>
+  o.direction === "hit" && o.ttfb.length > 1 ? o.ttfb.slice(1) : o.ttfb
 
 function regexMatches(source: string | undefined, value: string): boolean {
   return source === undefined || new RegExp(source).test(value)
@@ -135,6 +138,14 @@ function applyCachePolicy(
     return { state: "warn", note: "uncached where the reference caches, and possibly slower" }
   }
   return { state: "fail", note: "uncached where the reference caches, and slower" }
+}
+
+// What the timing samples of each direction are, for the label beside them.
+export function metricOf(direction: string | undefined, scenePrimary?: string): string {
+  if (direction === "load" || direction === "reload") return "lcp"
+  if (direction === "navigate") return "navigation"
+  if (direction === "scene") return scenePrimary ?? "durationMs"
+  return "ttfb"
 }
 
 type PerfInput = {
@@ -359,6 +370,7 @@ export function evaluate(input: EvaluateInput): Evaluation {
       call,
       explicitReference: !useLock,
     })
+    perf.metric = metricOf(def.direction, def.scene ? config.scenes[def.scene]?.primary : undefined)
 
     const actualCache = majorityCache(seen)
     const expectedCache: CacheClass | undefined = locked

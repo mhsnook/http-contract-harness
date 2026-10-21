@@ -150,13 +150,13 @@ export function describeCase(target: string, c: CaseVerdict): string[] {
   lines.push(COLOR[c.cache.state](cache) + (c.cache.note ? pc.dim(` (${c.cache.note})`) : ""))
   const a = c.perf.actual
   const perf = a
-    ? `    ttfb: median ${ms(a.median)}, p75 ${ms(a.p75)} (n=${a.n})` +
+    ? `    ${c.perf.metric ?? "ttfb"}: median ${ms(a.median)}, p75 ${ms(a.p75)} (n=${a.n})` +
       (c.perf.baseline
         ? `; ${c.perf.against ?? "reference"}${c.perf.paired ? " in the same batch" : c.perf.paired === false ? " from another run" : ""} median ${ms(c.perf.baseline.median)}, p75 ${ms(c.perf.baseline.p75)}: ${c.perf.call}`
         : "") +
       (c.perf.max !== undefined ? `; max median ${ms(c.perf.max)}` : "") +
       (c.perf.note ? `; ${c.perf.note}` : "")
-    : "    ttfb: –"
+    : `    ${c.perf.metric ?? "ttfb"}: –`
   lines.push(COLOR[c.perf.state](perf))
   return lines
 }

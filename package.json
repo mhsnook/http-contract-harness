@@ -12,7 +12,8 @@
   "files": [
     "dist",
     "README.md",
-    "GUIDE.md"
+    "GUIDE.md",
+    "docs"
   ],
   "engines": {
     "node": ">=22.13"
@@ -33,8 +34,17 @@
   },
   "devDependencies": {
     "@types/node": "^22.19.1",
+    "playwright-core": "^1.64.1",
     "prettier": "^3.9.10",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
+  },
+  "peerDependencies": {
+    "playwright-core": ">=1.40"
+  },
+  "peerDependenciesMeta": {
+    "playwright-core": {
+      "optional": true
+    }
   }
 }

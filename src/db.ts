@@ -35,6 +35,10 @@ export type Observation = {
   total: number[]
   bytes: number | null
   error: string | null
+  direction: string
+  // Every metric the direction measured, one sample per repeat; `ttfb` holds the one the timing
+  // verdict reads, whatever its name.
+  metrics: Record<string, number[]>
   /** Filled in on read, from the observation's run. */
   target?: string
   batch?: number | null
@@ -68,7 +72,9 @@ create table if not exists observations (
   ttfb text not null,
   total text not null,
   bytes integer,
-  error text
+  error text,
+  direction text not null default 'hit',
+  metrics text not null default '{}'
 );
 create index if not exists observations_case on observations(route, case_id, sample, run_id);
 create index if not exists runs_target on runs(target, label, id);
@@ -105,6 +111,8 @@ const toObservation = (r: Row): Observation => ({
   total: JSON.parse(r.total as string) as number[],
   bytes: (r.bytes as number | null) ?? null,
   error: (r.error as string | null) ?? null,
+  direction: (r.direction as string | undefined) ?? "hit",
+  metrics: JSON.parse((r.metrics as string | undefined) ?? "{}") as Record<string, number[]>,
   target: r.target as string | undefined,
   batch: (r.batch as number | null | undefined) ?? null,
 })
@@ -122,6 +130,11 @@ export class Store {
     if (!columns.some((c) => c.name === "batch"))
       this.db.exec("alter table runs add column batch integer")
     this.db.exec("create index if not exists runs_batch on runs(batch)")
+    const observed = this.db.prepare("pragma table_info(observations)").all() as Row[]
+    if (!observed.some((c) => c.name === "direction")) {
+      this.db.exec("alter table observations add column direction text not null default 'hit'")
+      this.db.exec("alter table observations add column metrics text not null default '{}'")
+    }
   }
 
   static open(root: string): Store {
@@ -164,8 +177,8 @@ export class Store {
     const result = this.db
       .prepare(
         `insert into observations
-         (run_id, route, case_id, sample, path, status, record, cache, cache_signal, ttfb, total, bytes, error)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (run_id, route, case_id, sample, path, status, record, cache, cache_signal, ttfb, total, bytes, error, direction, metrics)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         o.runId,
@@ -181,6 +194,8 @@ export class Store {
         JSON.stringify(o.total),
         o.bytes,
         o.error,
+        o.direction,
+        JSON.stringify(o.metrics),
       )
     return Number(result.lastInsertRowid)
   }

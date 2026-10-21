@@ -88,6 +88,40 @@ and as the fallback when nothing is paired.
 A ceiling set by hand (`loosen --ttfb`) settles the timing verdict on every target, since a person
 has decided what is fast enough for that route.
 
+## Directions
+
+Each direction came out of reading what the frameworks do, or out of a measurement that came back
+wrong.
+
+- **Cold needs a purge.** The usual cold-cache trick, a unique query string per request, does not
+  work on vinext 1.0: its shared page cache builds the key without the user query ("The user query
+  leaves both the URL and `resolvedUrl`", in `createSharedAppPageCacheIdentity`). A purge command
+  per target replaces it, and the cache header on each answer confirms the request missed, so a
+  purge that did not take cannot pass for a cold render.
+- **Client navigation needs a browser.** vinext's RSC request carries a `.rsc` suffix, a validated
+  `_rsc` cache-busting value, and render-mode, router-state and mounted-slot headers; Next's
+  differs. Reproducing either by hand would mean reimplementing each framework's client router, so
+  `navigate` clicks a real link and lets the framework make its own requests.
+- **A navigation ends at its own response.** On findaprotest, time until the network went quiet
+  read about 1.6 s for `/` → `/about`. Nearly all of it was the `/api/events` prefetch that starts
+  once the page goes idle. The click's own RSC response arrived in 120–250 ms.
+- **An aborted RSC fetch can be a finished one.** vinext's router aborts its RSC fetch after
+  reading it, so Playwright reports `net::ERR_ABORTED` on a request that answered 200 with
+  `text/x-component`. `navigate` counts such a request as finished.
+- **Only the target's own requests decide when a page has settled.** On the first try the home
+  page never settled, because third-party requests stayed open.
+- **A bypass secret stays on its origin.** Playwright's `extraHTTPHeaders` sends headers to every
+  origin a page touches, so portside adds them by intercepting the target's own requests only,
+  which turns the browser cache off. Cookies are scoped by the browser and leave the cache alone.
+
+## Experiments
+
+An experiment's before and after batches are minutes apart, which is the drift problem from
+**Timing** again. The reference target is untouched by the experiment, so its median's change
+between the two batches is taken as the drift, and the target's change is corrected by it before it
+is called. The ledger is a committed JSON file rather than rows in the database, because its point
+is that the next person or agent sees what was tried and why it was kept or thrown away.
+
 ## Running in concert
 
 A route's bar is shared by every target. When the port beats the lock, `ratchet` raises it for
@@ -111,7 +145,11 @@ can run anywhere observations can be read. The likely path, once the standalone 
 ## Not built yet
 
 - More route tables: the vinext route table from its build output, Astro, Remix, SvelteKit.
-- Browser timing (LCP, hydration) alongside time to first byte, from scenetest-js scenes.
+- Reading the platforms' own numbers per route: `vercel metrics` and `vercel logs requests` on
+  Vercel, the Workers Observability and GraphQL Analytics APIs on Cloudflare. They report what real
+  readers got, which a probe from one machine cannot.
+- Probes from more than one place, for example from a Worker in several regions.
+- Sending a share of real traffic to the port, so its platform numbers mean something.
 - Body checks beyond the three HTML fields, such as structured data or a selector's text.
 - An MCP server over the same commands.
 - Sharing measurements across a team, for example by syncing the SQLite file to object storage.

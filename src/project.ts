@@ -42,6 +42,7 @@ export type CaseRequest = {
   sample: string
   path: string
   headers: Record<string, string>
+  def: CaseDef
 }
 
 export function withQuery(path: string, query: string | undefined): string {
@@ -70,6 +71,7 @@ export function requestsOf(lock: Lock, only?: (pattern: string) => boolean): Cas
         headers: Object.fromEntries(
           Object.entries(def.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
         ),
+        def,
       })
     }
   }

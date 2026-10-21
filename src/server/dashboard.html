@@ -529,7 +529,7 @@
           <dt>contract</dt><dd class="${c.contract.state}">${c.contract.state}${diffs ? "" : c.observed ? " · every field matches" : ""}</dd>
           ${diffs ? `<dt></dt><dd>${diffs}</dd>` : ""}
           <dt>cache</dt><dd class="${c.cache.state}">${esc(c.cache.expected ?? "∅")} → ${esc(c.cache.actual)}<div class="sub">${esc(c.cache.signal ?? "")}${c.cache.note ? " · " + esc(c.cache.note) : ""}</div></dd>
-          <dt>ttfb</dt><dd class="${c.perf.state}">${a ? `median ${ms(a.median)} · p75 ${ms(a.p75)} · n=${a.n}` : "–"}<div class="sub">${c.perf.baseline ? `${esc(c.perf.against ?? "reference")}${c.perf.paired ? " (same batch)" : c.perf.paired === false ? " (another run)" : ""}: median ${ms(c.perf.baseline.median)} · p75 ${ms(c.perf.baseline.p75)} · ${c.perf.call}` : ""}${c.perf.max != null ? ` · max median ${ms(c.perf.max)}` : ""}${c.perf.note ? `<br>${esc(c.perf.note)}` : ""}</div></dd>
+          <dt>${esc(c.perf.metric ?? "ttfb")}</dt><dd class="${c.perf.state}">${a ? `median ${ms(a.median)} · p75 ${ms(a.p75)} · n=${a.n}` : "–"}<div class="sub">${c.perf.baseline ? `${esc(c.perf.against ?? "reference")}${c.perf.paired ? " (same batch)" : c.perf.paired === false ? " (another run)" : ""}: median ${ms(c.perf.baseline.median)} · p75 ${ms(c.perf.baseline.p75)} · ${c.perf.call}` : ""}${c.perf.max != null ? ` · max median ${ms(c.perf.max)}` : ""}${c.perf.note ? `<br>${esc(c.perf.note)}` : ""}</div></dd>
         </dl></div>`
               })
               .join("")}</div></div>`

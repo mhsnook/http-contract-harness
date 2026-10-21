@@ -10,8 +10,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
  * one redirect changed its status, the event page lost its cache and got slower, a JSON route's
  * cache-control changed with the host, and the blog got faster than it ever was.
  */
-export function site(flavour: Flavour): Promise<{ url: string; server: Server }> {
+export type Knobs = { eventDelay: number }
+
+export function site(flavour: Flavour): Promise<{ url: string; server: Server; knobs: Knobs }> {
   const hits = new Map<string, number>()
+  const knobs: Knobs = { eventDelay: flavour === "port" ? 80 : 0 }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://x")
     const path = url.pathname
@@ -46,8 +49,27 @@ export function site(flavour: Flavour): Promise<{ url: string; server: Server }>
         `<urlset>${pages.map((p) => `<url><loc>https://prod.example${p}</loc></url>`).join("")}</urlset>`,
       )
     }
-    if (path === "/") return html("home", { "cf-cache-status": seen > 1 ? "HIT" : "MISS" })
-    if (path === "/about") return html("about")
+    if (path === "/__purge") {
+      // /sticky ignores purges, the way a cache rule the purge cannot reach would.
+      const target = url.searchParams.get("path") ?? ""
+      if (target !== "/sticky")
+        for (const key of [...hits.keys()]) if (key.startsWith(target)) hits.delete(key)
+      res.writeHead(204)
+      return res.end()
+    }
+    if (path === "/sticky") return html("sticky", { "cf-cache-status": "HIT" })
+    if (path === "/") {
+      return html(`home <a href="/about">About</a>`, {
+        "cf-cache-status": seen > 1 ? "HIT" : "MISS",
+      })
+    }
+    if (path === "/about") {
+      if (req.headers["if-none-match"] === '"about-v1"') {
+        res.writeHead(304, { etag: '"about-v1"' })
+        return res.end()
+      }
+      return html("about", { etag: '"about-v1"' })
+    }
     if (path === "/old") {
       res.writeHead(flavour === "legacy" ? 301 : 308, { location: "/about" })
       return res.end()
@@ -63,7 +85,7 @@ export function site(flavour: Flavour): Promise<{ url: string; server: Server }>
         return res.end()
       }
       if (flavour === "port") {
-        await sleep(80)
+        await sleep(knobs.eventDelay)
         return html(`event ${randomUUID()}`, { "x-vinext-cache": "MISS" })
       }
       return html(`event`, { "x-vercel-cache": seen > 1 ? "HIT" : "MISS" })
@@ -83,7 +105,7 @@ export function site(flavour: Flavour): Promise<{ url: string; server: Server }>
     server.listen(0, "127.0.0.1", () => {
       const address = server.address()
       const port = typeof address === "object" && address ? address.port : 0
-      resolve({ url: `http://127.0.0.1:${port}`, server })
+      resolve({ url: `http://127.0.0.1:${port}`, server, knobs })
     }),
   )
 }

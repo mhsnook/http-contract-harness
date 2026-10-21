@@ -39,16 +39,30 @@ Portside tracks a route-by-route port of a website. You drive it with the `ports
 
 ## Experiments
 
-To try a rendering strategy on one route, label the runs:
+Every change made to speed a route up runs the same way:
 
-```sh
-portside run --target port --label strategy-a --route /event --json
-portside run --target port --label strategy-b --route /event --json
-portside compare port@strategy-a port@strategy-b --json
-```
+1. **Check what was tried.** `portside experiment list --route "<route>" --json`. If the same
+   idea was discarded before, read its `decision.why` and do not try it again unless something it
+   depended on has changed; say what.
+2. **Read the route.** `portside show "<route>" --json`, and the platform's own numbers when the
+   person has given you access to them. Form one theory about why it is slow.
+3. **Measure before.** `portside experiment start "<theory>" --route "<route>" --json` measures
+   the target and a reference together, before you change anything.
+4. **Change one thing**, and deploy it to the target.
+5. **Measure.** `portside experiment measure <id> --json`. Read `result.cases[]`: `change`
+   (`better`, `worse`, `noise`) is already corrected for drift, `deltaMs` is the corrected change,
+   and `broken` names any case whose contract the change broke.
+6. **Decide, and write it down.** `portside experiment decide <id> keep|discard --why "…"`. The
+   reason is for the next agent: say what you measured and why it settles the theory. Keeping an
+   experiment that broke the contract is refused; fix it and measure again, or discard it.
 
-Report what you measured and recommend one. Labelled runs measured separately are minutes apart:
-when the difference is small, run them again before you trust it.
+`noise` is a result, not a failure: the change did not move the route by enough to see. Discard
+it, or measure again with `--repeats` raised if the theory predicted a small change.
+
+To cover a route from more directions first, `portside probe "<route>" --direction
+hit,revalidate,cold,load,navigate --from <page that links to it>`. `cold` needs a `purge` command
+on each target and `navigate` needs `--from`; if either is missing, ask the person rather than
+inventing one.
 
 ## What needs a person
 
@@ -60,8 +74,9 @@ own words as the reason:
 - Adding to `allow` in the config.
 - `portside route remove`.
 
-These only add or tighten, and you can run them when the task calls for it:
+These only add, measure or tighten, and you can run them when the task calls for it:
 
+- `portside experiment start`, `measure`, `decide`
 - `portside discover`, `portside route add`, `portside case add`, `portside route sample`
 - `portside lock` without `--force`, which only locks unlocked cases
 - `portside ratchet`; show the person what it tightened

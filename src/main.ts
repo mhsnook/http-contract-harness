@@ -11,7 +11,17 @@ import {
   writeConfig,
   writeLock,
   cachePolicy,
+  direction,
+  type CaseDef,
 } from "./config.ts"
+import {
+  decideExperiment,
+  getExperiment,
+  listExperiments,
+  measureExperiment,
+  startExperiment,
+  type Experiment,
+} from "./experiments.ts"
 import { discover } from "./discover/index.ts"
 import { matchPattern } from "./patterns.ts"
 import { openProject, type Project } from "./project.ts"
@@ -81,7 +91,9 @@ Set up
   route sample <pattern> <path>…                     add samples to a route
   route weight <pattern> <n>
   route remove <pattern>
-  case add <pattern> <id> [--header k:v]… [--cookie k=v]… [--query q] [--note text]
+  case add <pattern> <id> [--direction D] [--header k:v]… [--cookie k=v]… [--query q]
+                     [--from PAGE] [--link SELECTOR] [--ready SELECTOR] [--scene NAME] [--note text]
+                     directions: hit (default), revalidate, cold, load, reload, navigate, scene
   routes                                             list the inventory
 
 Measure
@@ -90,6 +102,16 @@ Measure
   status [--target T]… [--all] [--markdown] [--gate] how every route does against the lock
   show <route|route#case>                            one route on every target, in full
   compare <before> <after>                           runs or targets head to head: 12, port, port@label
+
+Experiment
+  probe <route> --direction hit,cold,navigate… [--from PAGE]
+                                                     add those cases to one route and measure it now
+  experiment start "<theory>" --route P… [--target T] [--against T]
+                                                     list what was tried there, then measure before
+  experiment measure <id>                            measure after the change; drift-corrected
+  experiment decide <id> keep|discard --why "…"      write the decision down
+  experiment list [--route P] [--open]
+  experiment show <id>
 
 Lock it in
   lock [--from T | --run ID] [--route P]… [--case KEY]… [--force --reason why] [--dry-run]
@@ -293,27 +315,14 @@ async function dispatch(project: Project, command: string, argv: string[]) {
       const [sub, pattern, id, ...more] = argv
       if (sub !== "add" || !pattern || !id)
         throw new Error(
-          "Usage: portside case add <pattern> <id> [--header k:v] [--cookie k=v] [--query q]",
+          "Usage: portside case add <pattern> <id> [--direction D] [--header k:v] [--cookie k=v] [--query q]",
         )
-      const { values } = parse(more, {
-        header: { type: "string", multiple: true },
-        cookie: { type: "string", multiple: true },
-        query: { type: "string" },
-        note: { type: "string" },
-      })
+      const { values } = parse(more, CASE_OPTIONS)
       const route = project.lock.routes[pattern]
       if (!route)
         throw new Error(`${pattern} is not in the lock; add it with \`portside route add\``)
       if (route.cases[id]) throw new Error(`${caseKey(pattern, id)} already exists`)
-      const headers = keyValues(values.header as string[] | undefined, ":")
-      const cookies = values.cookie as string[] | undefined
-      if (cookies?.length) headers["cookie"] = cookies.join("; ")
-      route.cases[id] = {
-        headers: Object.keys(headers).length ? headers : undefined,
-        query: values.query as string | undefined,
-        note: values.note as string | undefined,
-        history: [],
-      }
+      route.cases[id] = caseFrom(values, project)
       project.saveLock()
       return out(values.json as boolean, route.cases[id], () => `Added ${caseKey(pattern, id)}`)
     }
@@ -552,9 +561,224 @@ async function dispatch(project: Project, command: string, argv: string[]) {
       return
     }
 
+    case "probe": {
+      const [pattern, ...more] = argv
+      if (!pattern)
+        throw new Error(
+          "Usage: portside probe <route> --direction hit,revalidate,cold,load,reload,navigate",
+        )
+      const { values } = parse(more, {
+        ...CASE_OPTIONS,
+        target: { type: "string", multiple: true },
+        label: { type: "string" },
+        repeats: { type: "string" },
+      })
+      const route = project.lock.routes[pattern]
+      if (!route) throw new Error(`${pattern} is not in the lock`)
+      const wanted = String(values.direction ?? "hit")
+        .split(",")
+        .map((d) => d.trim())
+        .filter(Boolean)
+      const added: string[] = []
+      for (const name of wanted) {
+        const d = direction.parse(name)
+        if (Object.values(route.cases).some((c) => (c.direction ?? "hit") === d)) continue
+        route.cases[d] = caseFrom({ ...values, direction: d }, project)
+        added.push(caseKey(pattern, d))
+      }
+      if (added.length) project.saveLock()
+      const result = await runBatch(project, {
+        targets: (values.target as string[] | undefined) ?? Object.keys(project.config.targets),
+        label: values.label as string | undefined,
+        routes: (p) => p === pattern,
+        repeats: values.repeats ? Number(values.repeats) : undefined,
+      })
+      const evals = statusOf(project)
+      return out(values.json as boolean, { added, batch: result.batch, status: evals }, () =>
+        [
+          ...added.map((k) => pc.green(`+ case ${k}`)),
+          `Batch ${result.batch} on ${pattern}`,
+          ...evals.flatMap(({ target, evaluation }) =>
+            evaluation.routes
+              .filter((r) => r.route === pattern)
+              .flatMap((r) => r.cases.flatMap((c) => describeCase(`${target} #${c.caseId}`, c))),
+          ),
+        ].join("\n"),
+      )
+    }
+
+    case "experiment": {
+      const [sub, ...more] = argv
+      const { values, positionals } = parse(more, {
+        route: { type: "string", multiple: true },
+        target: { type: "string" },
+        against: { type: "string" },
+        id: { type: "string" },
+        why: { type: "string" },
+        note: { type: "string" },
+        repeats: { type: "string" },
+        open: { type: "boolean", default: false },
+      })
+      const json = values.json as boolean
+      const repeats = values.repeats ? Number(values.repeats) : undefined
+      if (sub === "start") {
+        const theory = positionals.join(" ")
+        const target =
+          (values.target as string | undefined) ??
+          Object.keys(project.config.targets).find((t) => t !== project.config.baseline) ??
+          project.config.baseline
+        const routes = (values.route as string[] | undefined) ?? []
+        const before = listExperiments(project, { routes })
+        if (!json && before.length) {
+          console.log(pc.yellow(`Already tried on these routes:`))
+          for (const e of before) console.log(describeExperiment(e, true))
+          console.log("")
+        }
+        const { experiment, related } = await startExperiment(project, {
+          theory,
+          routes,
+          target,
+          against: values.against as string | undefined,
+          id: values.id as string | undefined,
+          repeats,
+          note: values.note as string | undefined,
+        })
+        return out(json, { experiment, related }, () =>
+          [
+            `Started ${pc.bold(experiment.id)}: measured the before batch on ${experiment.target}, against ${experiment.reference}.`,
+            `Make the one change, deploy it, then: portside experiment measure ${experiment.id}`,
+          ].join("\n"),
+        )
+      }
+      if (sub === "measure") {
+        const id = positionals[0]
+        if (!id) throw new Error("Usage: portside experiment measure <id>")
+        const { experiment, warnings } = await measureExperiment(project, id, {
+          note: values.note as string | undefined,
+          repeats,
+        })
+        for (const w of warnings) if (!json) console.error(pc.yellow(w))
+        return out(json, { experiment, warnings }, () =>
+          [
+            describeExperiment(experiment, false),
+            "",
+            `Then: portside experiment decide ${id} keep|discard --why "…"`,
+          ].join("\n"),
+        )
+      }
+      if (sub === "decide") {
+        const [id, verdict] = positionals
+        if (!id || (verdict !== "keep" && verdict !== "discard")) {
+          throw new Error('Usage: portside experiment decide <id> keep|discard --why "…"')
+        }
+        const experiment = decideExperiment(
+          project,
+          id,
+          verdict,
+          (values.why as string | undefined) ?? "",
+        )
+        return out(json, experiment, () => `${verdict === "keep" ? "Kept" : "Discarded"} ${id}.`)
+      }
+      if (sub === "list") {
+        const list = listExperiments(project, {
+          routes: values.route as string[] | undefined,
+          open: values.open as boolean,
+        })
+        return out(
+          json,
+          list,
+          () => list.map((e) => describeExperiment(e, true)).join("\n") || "No experiments yet.",
+        )
+      }
+      if (sub === "show") {
+        const id = positionals[0]
+        if (!id) throw new Error("Usage: portside experiment show <id>")
+        const experiment = getExperiment(project, id)
+        return out(json, experiment, () => describeExperiment(experiment, false))
+      }
+      throw new Error("Usage: portside experiment start|measure|decide|list|show")
+    }
+
     default:
       throw new Error(`Unknown command "${command}". \`portside help\` lists them.`)
   }
+}
+
+const CASE_OPTIONS: Options = {
+  direction: { type: "string" },
+  header: { type: "string", multiple: true },
+  cookie: { type: "string", multiple: true },
+  query: { type: "string" },
+  from: { type: "string" },
+  link: { type: "string" },
+  ready: { type: "string" },
+  scene: { type: "string" },
+  note: { type: "string" },
+}
+
+function caseFrom(values: Record<string, unknown>, project: Project): CaseDef {
+  const d = values.direction === undefined ? undefined : direction.parse(values.direction)
+  if (d === "navigate" && !values.from)
+    throw new Error("A navigate case needs --from, the page whose link it clicks")
+  if (d === "scene") {
+    const name = values.scene as string | undefined
+    if (!name || !project.config.scenes[name])
+      throw new Error(
+        `A scene case needs --scene, one of: ${Object.keys(project.config.scenes).join(", ") || "(none in the config)"}`,
+      )
+  }
+  const headers = keyValues(values.header as string[] | undefined, ":")
+  const cookies = values.cookie as string[] | undefined
+  if (cookies?.length) headers["cookie"] = cookies.join("; ")
+  return {
+    direction: d === "hit" ? undefined : d,
+    headers: Object.keys(headers).length ? headers : undefined,
+    query: values.query as string | undefined,
+    from: values.from as string | undefined,
+    link: values.link as string | undefined,
+    ready: values.ready as string | undefined,
+    scene: values.scene as string | undefined,
+    note: values.note as string | undefined,
+    history: [],
+  }
+}
+
+const ms = (n: number | undefined) => (n === undefined ? "–" : `${Math.round(n)}ms`)
+
+function describeExperiment(e: Experiment, short: boolean): string {
+  const state = e.decision
+    ? e.decision.verdict === "keep"
+      ? pc.green("kept")
+      : pc.dim("discarded")
+    : e.result
+      ? pc.yellow("measured, undecided")
+      : pc.yellow("waiting for the after batch")
+  const head = `${pc.bold(e.id)}  ${state}  ${pc.dim(`${e.target} vs ${e.reference} on ${e.routes.join(", ")}`)}\n  theory: ${e.theory}`
+  const why = e.decision ? `\n  ${e.decision.verdict}: ${e.decision.why}` : ""
+  const r = e.result
+  const tally = r
+    ? `\n  ${r.better} better, ${r.worse} worse, ${r.noise} noise${r.broken ? pc.red(`, ${r.broken} broke the contract`) : ""}`
+    : ""
+  if (short || !r) return head + tally + why
+  const rows = r.cases.map((c) => {
+    const call =
+      c.change === "better"
+        ? pc.green("better")
+        : c.change === "worse"
+          ? pc.red("worse")
+          : pc.dim(c.change)
+    const timing =
+      c.before.target && c.after.target
+        ? `${ms(c.before.target.median)} → ${ms(c.after.target.median)}, ${c.deltaMs! > 0 ? "+" : ""}${ms(c.deltaMs)} after ${ms(c.driftMs)} drift`
+        : "not measured on both sides"
+    const cache =
+      c.cache && c.cache.before !== c.cache.after
+        ? `, cache ${c.cache.before} → ${c.cache.after}`
+        : ""
+    const broken = c.broken ? pc.red(`, broke: ${c.broken}`) : ""
+    return `    ${call.padEnd(16)} ${c.key} ${pc.dim(`(${c.direction})`)}: ${timing}${cache}${broken}`
+  })
+  return [head + tally + why, ...rows].join("\n")
 }
 
 export async function cli(argv: string[]) {

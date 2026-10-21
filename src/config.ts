@@ -9,6 +9,19 @@ export const STATE_DIR = ".portside"
 const headers = z.record(z.string(), z.string())
 
 export const cachePolicy = z.enum(["must-match", "if-slower", "ignore"])
+
+export const DIRECTIONS = [
+  "hit",
+  "revalidate",
+  "cold",
+  "load",
+  "reload",
+  "navigate",
+  "scene",
+] as const
+export const direction = z.enum(DIRECTIONS)
+export type Direction = z.infer<typeof direction>
+export const BROWSER_DIRECTIONS: readonly Direction[] = ["load", "reload", "navigate"]
 export type CachePolicy = z.infer<typeof cachePolicy>
 
 const target = z.object({
@@ -17,6 +30,12 @@ const target = z.object({
   // A target that leaves the ratchet never tightens the lock, such as a local dev server whose
   // timings say nothing about production.
   ratchet: z.boolean().default(true),
+  // A shell command that empties this target's cache for one path, run before each cold request
+  // with PORTSIDE_URL, PORTSIDE_PATH and PORTSIDE_TARGET set.
+  purge: z.string().optional(),
+  // Sent by the browser directions as cookies on the target's own domain. Headers reach the
+  // browser too, but only by intercepting requests, which turns the browser's cache off.
+  cookies: z.record(z.string(), z.string()).optional(),
   note: z.string().optional(),
 })
 export type Target = z.infer<typeof target>
@@ -46,8 +65,29 @@ export const configSchema = z.object({
       headers: z.array(z.string()).default(["vary", "x-robots-tag"]),
       htmlCacheControl: z.boolean().default(false),
       errorsMatchOnStatus: z.boolean().default(true),
+      userAgent: z.string().optional(),
     })
     .prefault({}),
+  browser: z
+    .object({
+      executablePath: z.string().optional(),
+      headless: z.boolean().default(true),
+      repeats: z.number().int().min(1).default(5),
+      // How long the network has to stay quiet before a page counts as settled.
+      quietMs: z.number().int().min(0).default(300),
+    })
+    .prefault({}),
+  scenes: z
+    .record(
+      z.string(),
+      z.object({
+        command: z.string(),
+        // The metric in the scene's PORTSIDE_METRICS file that the timing verdict reads.
+        primary: z.string().default("durationMs"),
+        repeats: z.number().int().min(1).default(3),
+      }),
+    )
+    .default({}),
   perf: z
     .object({
       threshold: z.number().min(0).default(0.1),
@@ -105,8 +145,13 @@ const historyEntry = z.object({
 export type HistoryEntry = z.infer<typeof historyEntry>
 
 const caseSchema = z.object({
+  direction: direction.optional(),
   headers: headers.optional(),
   query: z.string().optional(),
+  from: z.string().optional(),
+  link: z.string().optional(),
+  ready: z.string().optional(),
+  scene: z.string().optional(),
   note: z.string().optional(),
   expect: expectSchema.optional(),
   history: z.array(historyEntry).default([]),
@@ -199,10 +244,14 @@ function sortKeys(value: unknown): unknown {
   return value
 }
 
-// Sorted keys, or two people locking the same routes write different files and every review diff
-// is noise.
+// Sorted keys, or two people writing the same records produce different files and every review
+// diff is noise.
+export function writeSorted(file: string, value: unknown): void {
+  writeFileSync(file, JSON.stringify(sortKeys(value), null, 2) + "\n")
+}
+
 export function writeLock(root: string, lock: Lock): void {
-  writeFileSync(join(root, LOCK_FILE), JSON.stringify(sortKeys(lock), null, 2) + "\n")
+  writeSorted(join(root, LOCK_FILE), lock)
 }
 
 export function writeConfig(root: string, config: unknown): void {
