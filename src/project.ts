@@ -9,8 +9,11 @@ import {
   type Lock,
   type RouteDef,
 } from "./config.ts"
+import { join } from "node:path"
 import { Store } from "./db.ts"
+import type { EngineRequest } from "./engine.ts"
 import { bySpecificity } from "./patterns.ts"
+import { loadProbes, type LoadedProbe } from "./probe.ts"
 
 export type Project = {
   root: string
@@ -18,6 +21,7 @@ export type Project = {
   lock: Lock
   store: Store
   saveLock(): void
+  probes(): Promise<Map<string, LoadedProbe>>
 }
 
 export function openProject(cwd = process.cwd()): Project {
@@ -31,19 +35,14 @@ export function openProject(cwd = process.cwd()): Project {
     lock: readLock(root),
     store: Store.open(root),
     saveLock: () => writeLock(root, project.lock),
+    probes: () => loadProbes(join(root, project.config.probes)),
   }
   return project
 }
 
-export type CaseRequest = {
-  route: string
-  caseId: string
-  key: string
-  sample: string
-  path: string
-  headers: Record<string, string>
-  def: CaseDef
-}
+export type CaseRequest = EngineRequest & { key: string }
+
+export const probeOf = (config: Config, def: CaseDef) => def.probe ?? config.defaults.probe
 
 export function withQuery(path: string, query: string | undefined): string {
   if (!query) return path
@@ -57,7 +56,11 @@ export function* casesOf(lock: Lock): Generator<[string, RouteDef, string, CaseD
   }
 }
 
-export function requestsOf(lock: Lock, only?: (pattern: string) => boolean): CaseRequest[] {
+export function requestsOf(
+  config: Config,
+  lock: Lock,
+  only?: (pattern: string) => boolean,
+): CaseRequest[] {
   const out: CaseRequest[] = []
   for (const [pattern, route, caseId, def] of casesOf(lock)) {
     if (only && !only(pattern)) continue
@@ -71,7 +74,8 @@ export function requestsOf(lock: Lock, only?: (pattern: string) => boolean): Cas
         headers: Object.fromEntries(
           Object.entries(def.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
         ),
-        def,
+        probe: probeOf(config, def),
+        conditions: def.conditions ?? {},
       })
     }
   }

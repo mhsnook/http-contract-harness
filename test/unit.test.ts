@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import { classify } from "../src/cache.ts"
 import { expandHeaders } from "../src/config.ts"
 import { readUrlList } from "../src/discover/urls.ts"
+import { bundleOf, hashBundle, servedFrom } from "../src/probe.ts"
 import {
   borrowSamples,
   expandPattern,
@@ -223,5 +224,27 @@ describe("URL lists", () => {
       ["/about", 15],
       ["/blog", 1],
     ])
+  })
+})
+
+describe("probes", () => {
+  it("reads where each platform says it answered", () => {
+    expect(servedFrom({ "cf-ray": "8f1c2a3b4c5d6e7f-FRA" })).toBe("cloudflare:FRA")
+    expect(servedFrom({ "x-vercel-id": "fra1::iad1::abc-123" })).toBe("vercel:fra1>iad1")
+    expect(servedFrom({ "x-amz-cf-pop": "LHR61-P1" })).toBe("cloudfront:LHR61-P1")
+    expect(servedFrom({})).toBeUndefined()
+  })
+
+  it("versions a probe by its own file and every local module it imports", () => {
+    const dir = mkdtempSync(join(tmpdir(), "portside-bundle-"))
+    writeFileSync(join(dir, "_shared.mjs"), "export const x = 1\n")
+    writeFileSync(
+      join(dir, "a.mjs"),
+      'import { x } from "./_shared.mjs"\nexport default { primary: "x", measure: async () => ({ metrics: { x } }) }\n',
+    )
+    const before = bundleOf(dir, "a.mjs")
+    expect(Object.keys(before.files).sort()).toEqual(["_shared.mjs", "a.mjs"])
+    writeFileSync(join(dir, "_shared.mjs"), "export const x = 2\n")
+    expect(hashBundle(bundleOf(dir, "a.mjs"))).not.toBe(hashBundle(before))
   })
 })

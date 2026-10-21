@@ -1,14 +1,13 @@
-import type { CacheClass } from "./cache.ts"
-import { caseKey, type Expect } from "./config.ts"
-import type { Observation } from "./db.ts"
-import { casesOf, type Project } from "./project.ts"
+import { caseKey, type Expect, type FieldSpec } from "./config.ts"
+import { casesOf, probeOf, type Project } from "./project.ts"
 import { commonRecord } from "./record.ts"
 import { callChange, summarise, type Summary } from "./stats.ts"
-import { evaluate, warmTimings } from "./verdict.ts"
+import { probeInfo, statusOf, vantagesOf } from "./status.ts"
 
 export type Change = {
   key: string
   field: string
+  vantage?: string
   from?: unknown
   to?: unknown
   source?: string
@@ -17,14 +16,9 @@ export type Change = {
 
 const now = () => new Date().toISOString()
 
-function majority(observations: Observation[]): CacheClass {
-  const known = observations.map((o) => o.cache).filter((c) => c !== "unknown")
-  if (known.length === 0) return "unknown"
-  return known.filter((c) => c === "cached").length * 2 >= known.length ? "cached" : "uncached"
-}
-
 export type LockOptions = {
   from: string
+  vantages?: string[]
   runId?: number
   only?: (key: string, pattern: string) => boolean
   force?: boolean
@@ -32,51 +26,92 @@ export type LockOptions = {
   dryRun?: boolean
 }
 
-export function lock(project: Project, opts: LockOptions): Change[] {
+/**
+ * Writes what a target does today into the lock: the record its probe returned, and the primary
+ * metric's distribution from each vantage. A locked case keeps its lock unless `force` is set,
+ * and forcing takes a reason.
+ */
+export async function lock(project: Project, opts: LockOptions): Promise<Change[]> {
   if (opts.force && !opts.reason) throw new Error("Re-locking a locked case needs --reason")
-  const observations =
-    opts.runId !== undefined
-      ? project.store.observationsOf(opts.runId)
-      : project.store.latestFor(opts.from)
-  const source = opts.runId !== undefined ? `run ${opts.runId}` : opts.from
+  const probes = await probeInfo(project)
+  const run = opts.runId !== undefined ? project.store.run(opts.runId) : undefined
+  if (opts.runId !== undefined && !run) throw new Error(`No run ${opts.runId}`)
+  const vantages = run ? [run.vantage] : vantagesOf(project, opts.vantages)
+  const byVantage = new Map(
+    vantages.map((v) => [
+      v,
+      run ? project.store.observationsOf(run.id) : project.store.latestFor(opts.from, v),
+    ]),
+  )
+  const source = run ? `run ${run.id}` : opts.from
   const changes: Change[] = []
 
   for (const [pattern, route, caseId, def] of casesOf(project.lock)) {
     const key = caseKey(pattern, caseId)
     if (opts.only && !opts.only(key, pattern)) continue
-    const seen = observations.filter(
-      (o) => o.route === pattern && o.caseId === caseId && route.samples.includes(o.sample),
-    )
-    const ok = seen.filter((o) => o.record && !o.error)
-    if (ok.length === 0) {
-      changes.push({ key, field: "*", skipped: `no observations from ${source}` })
-      continue
-    }
     if (def.expect && !opts.force) {
       changes.push({ key, field: "*", skipped: "already locked (use --force --reason to re-lock)" })
       continue
     }
-    const record = { ...commonRecord(ok.map((o) => o.record!))! }
-    const status = record["status"] as number
+    const name = probeOf(project.config, def)
+    const ok = [...byVantage.values()]
+      .flat()
+      .filter((o) => o.route === pattern && o.caseId === caseId && route.samples.includes(o.sample))
+      .filter((o) => o.record && !o.error)
+    const hash = ok[0]?.probeHash
+    const current = probes.get(name)?.hash
+    if (ok.length === 0) {
+      changes.push({ key, field: "*", skipped: `no observations from ${source}` })
+      continue
+    }
+    if (current && hash !== current) {
+      changes.push({
+        key,
+        field: "*",
+        skipped: `measured with an older ${name}; run it again first`,
+      })
+      continue
+    }
+    const record = {
+      ...commonRecord(ok.filter((o) => o.probeHash === hash).map((o) => o.record!))!,
+    }
+    const status = typeof record["status"] === "number" ? (record["status"] as number) : undefined
     delete record["status"]
-    const cache = majority(ok)
-    const timings = summarise(ok.flatMap(warmTimings))
+    const timing: Record<string, Summary> = {}
+    for (const [v, list] of byVantage) {
+      const s = summarise(
+        list
+          .filter(
+            (o) => o.route === pattern && o.caseId === caseId && o.probeHash === hash && !o.error,
+          )
+          .flatMap((o) => o.primary),
+      )
+      if (s) timing[v] = s
+    }
     const expect: Expect = {
+      probe: { name, hash: hash as string },
       status,
       record,
-      cache: cache === "unknown" ? undefined : cache,
-      ttfb: timings,
+      metric: probes.get(name)?.primary,
+      timing,
+      max: def.expect?.max ?? {},
       lockedFrom: source,
       lockedAt: now(),
     }
-    changes.push({ key, field: "*", from: def.expect, to: expect, source })
+    changes.push({
+      key,
+      field: "*",
+      from: def.expect ? brief(def.expect) : undefined,
+      to: brief(expect),
+      source,
+    })
     if (opts.dryRun) continue
     def.history.push({
       at: expect.lockedAt as string,
       by: "lock",
       field: "*",
-      from: def.expect ? summariseExpect(def.expect) : undefined,
-      to: summariseExpect(expect),
+      from: def.expect ? brief(def.expect) : undefined,
+      to: brief(expect),
       reason: opts.reason,
     })
     def.expect = expect
@@ -85,79 +120,98 @@ export function lock(project: Project, opts: LockOptions): Change[] {
   return changes
 }
 
-function summariseExpect(e: Expect) {
-  return { status: e.status, cache: e.cache, ttfb: e.ttfb?.median, ttfbMax: e.ttfbMax }
+function brief(e: Expect) {
+  return {
+    probe: e.probe ? `${e.probe.name}@${e.probe.hash}` : undefined,
+    status: e.status,
+    timing: Object.fromEntries(Object.entries(e.timing).map(([v, s]) => [v, s.median])),
+  }
 }
 
-export function ratchet(project: Project, opts: { dryRun?: boolean } = {}): Change[] {
-  const { config } = project
-  const best = new Map<string, { ttfb?: [Summary, string]; cache?: string }>()
+const orderOf = (spec: FieldSpec | undefined) =>
+  spec && typeof spec === "object" ? spec.order : undefined
 
-  for (const [name, target] of Object.entries(config.targets)) {
-    if (!target.ratchet) continue
-    const evaluation = evaluate({
-      config,
-      lock: project.lock,
-      target: name,
-      observations: project.store.latestFor(name),
-    })
+/**
+ * Tightens every lock a ratcheting target now beats while meeting its contract: a primary-metric
+ * distribution clearly faster than the locked one from the same vantage, or a field moved up its
+ * probe's `order`. Never loosens.
+ */
+export async function ratchet(
+  project: Project,
+  opts: { dryRun?: boolean } = {},
+): Promise<Change[]> {
+  const { config } = project
+  const probes = await probeInfo(project)
+  const timing = new Map<string, [Summary, string]>()
+  const fields = new Map<string, [string, string | number, string]>()
+  const ratcheting = Object.entries(config.targets)
+    .filter(([, t]) => t.ratchet)
+    .map(([n]) => n)
+
+  for (const { target, vantage, evaluation } of await statusOf(project, { targets: ratcheting })) {
     for (const route of evaluation.routes) {
       for (const c of route.cases) {
-        if (c.reference !== "lock" || c.contract.state !== "pass") continue
-        const entry = best.get(c.key) ?? {}
-        const actual = c.perf.actual
+        if (c.reference !== "lock" || c.stale) continue
+        if (c.contract.state === "fail") continue
         const expect = project.lock.routes[route.route]?.cases[c.caseId]?.expect
-        const beats =
-          actual && expect
-            ? expect.ttfb
-              ? callChange(expect.ttfb, actual, config.perf.threshold, config.perf.minDeltaMs) ===
-                "better"
-              : expect.ttfbMax !== undefined && actual.p75 < expect.ttfbMax
-            : false
-        if (actual && beats && (!entry.ttfb || actual.median < entry.ttfb[0].median)) {
-          entry.ttfb = [actual, name]
+        const actual = c.perf.actual
+        const locked = expect?.timing[vantage]
+        if (
+          actual &&
+          locked &&
+          callChange(locked, actual, config.perf.threshold, config.perf.minDeltaMs) === "better"
+        ) {
+          const k = `${c.key} ${vantage}`
+          const prev = timing.get(k)
+          if (!prev || actual.median < prev[0].median) timing.set(k, [actual, target])
         }
-        if (c.cache.actual === "cached") entry.cache ??= name
-        best.set(c.key, entry)
+        for (const d of c.contract.diffs) {
+          if (d.improved && d.actual !== undefined)
+            fields.set(`${c.key} ${d.field}`, [d.field, d.actual, target])
+        }
       }
     }
   }
 
   const changes: Change[] = []
-  for (const [pattern, , caseId, def] of casesOf(project.lock)) {
+  for (const [pattern, route, caseId, def] of casesOf(project.lock)) {
     const key = caseKey(pattern, caseId)
-    const found = best.get(key)
     const expect = def.expect
-    if (!found || !expect) continue
-    if (found.ttfb) {
-      const [summary, by] = found.ttfb
-      const from = expect.ttfb?.median ?? expect.ttfbMax
-      changes.push({ key, field: "ttfb", from, to: summary.median, source: by })
-      if (!opts.dryRun) {
-        def.history.push({
-          at: now(),
-          by: "ratchet",
-          field: "ttfb",
-          from,
-          to: summary.median,
-          reason: `beaten by ${by}`,
-        })
-        expect.ttfb = summary
-      }
+    if (!expect) continue
+    for (const [k, [summary, by]] of timing) {
+      if (!k.startsWith(`${key} `)) continue
+      const vantage = k.slice(key.length + 1)
+      const from = expect.timing[vantage]?.median
+      changes.push({ key, field: "timing", vantage, from, to: summary.median, source: by })
+      if (opts.dryRun) continue
+      def.history.push({
+        at: now(),
+        by: "ratchet",
+        field: `timing/${vantage}`,
+        from,
+        to: summary.median,
+        reason: `beaten by ${by}`,
+      })
+      expect.timing[vantage] = summary
     }
-    if (found.cache && expect.cache !== "cached") {
-      changes.push({ key, field: "cache", from: expect.cache, to: "cached", source: found.cache })
-      if (!opts.dryRun) {
-        def.history.push({
-          at: now(),
-          by: "ratchet",
-          field: "cache",
-          from: expect.cache,
-          to: "cached",
-          reason: `cached on ${found.cache}`,
-        })
-        expect.cache = "cached"
-      }
+    const spec = (field: string) =>
+      def.fields?.[field] ??
+      route.fields?.[field] ??
+      probes.get(probeOf(config, def))?.fields?.[field]
+    for (const [k, [field, value, by]] of fields) {
+      if (!k.startsWith(`${key} `) || !orderOf(spec(field))) continue
+      const from = field === "status" ? expect.status : expect.record[field]
+      changes.push({ key, field, from, to: value, source: by })
+      if (opts.dryRun) continue
+      def.history.push({
+        at: now(),
+        by: "ratchet",
+        field,
+        from,
+        to: value,
+        reason: `reached on ${by}`,
+      })
+      expect.record[field] = value
     }
   }
   if (!opts.dryRun && changes.length > 0) project.saveLock()
@@ -165,14 +219,16 @@ export function ratchet(project: Project, opts: { dryRun?: boolean } = {}): Chan
 }
 
 export type LoosenOptions = {
-  /** A ceiling on the median in place of the locked distribution, or `none` to stop judging TTFB. */
-  ttfb?: number | "none"
-  cache?: "uncached" | "none"
+  // A ceiling on the primary metric's median in place of the locked distribution, or `none` to
+  // stop judging timing.
+  max?: number | "none"
+  vantage?: string
   drop?: string[]
   set?: Record<string, string>
   reason: string
 }
 
+/** The one way to lower a bar by hand. It always records why, beside the case, in the lock. */
 export function loosen(project: Project, key: string, opts: LoosenOptions): Change[] {
   if (!opts.reason?.trim()) throw new Error("loosen needs --reason")
   const hash = key.lastIndexOf("#")
@@ -186,16 +242,21 @@ export function loosen(project: Project, key: string, opts: LoosenOptions): Chan
     changes.push({ key: caseKey(pattern, caseId), field, from, to })
     def.history.push({ at: now(), by: "loosen", field, from, to, reason: opts.reason })
   }
-  if (opts.ttfb !== undefined) {
-    const to = opts.ttfb === "none" ? undefined : opts.ttfb
-    note("ttfb", expect.ttfbMax ?? expect.ttfb?.median, to ?? "none")
-    delete expect.ttfb
-    expect.ttfbMax = to
-  }
-  if (opts.cache) {
-    const to = opts.cache === "none" ? undefined : opts.cache
-    note("cache", expect.cache, to)
-    expect.cache = to
+  if (opts.max !== undefined) {
+    const scope = opts.vantage ?? "*"
+    const from =
+      expect.max[scope] ?? (opts.vantage ? expect.timing[opts.vantage]?.median : undefined)
+    if (opts.max === "none") {
+      note(`timing/${scope}`, from, "none")
+      if (opts.vantage) delete expect.timing[opts.vantage]
+      else expect.timing = {}
+      delete expect.max[scope]
+    } else {
+      note(`max/${scope}`, from, opts.max)
+      if (opts.vantage) delete expect.timing[opts.vantage]
+      else expect.timing = {}
+      expect.max[scope] = opts.max
+    }
   }
   for (const field of opts.drop ?? []) {
     if (field === "status") throw new Error("status cannot be dropped; set it with --set status=…")
@@ -208,8 +269,7 @@ export function loosen(project: Project, key: string, opts: LoosenOptions): Chan
     if (field === "status") expect.status = typed as number
     else expect.record[field] = typed
   }
-  if (changes.length === 0)
-    throw new Error("Nothing to loosen: pass --ttfb, --cache, --drop or --set")
+  if (changes.length === 0) throw new Error("Nothing to loosen: pass --max, --drop or --set")
   project.saveLock()
   return changes
 }

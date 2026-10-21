@@ -17,6 +17,8 @@ export type DiscoverOptions = {
   target?: string
   next?: string
   urls?: string
+  // Paths from the traffic `portside survey` imported, so the routes readers use are covered.
+  traffic?: boolean
   reweight?: boolean
   /** Re-derive every route nobody has touched: not added by hand, nothing locked, no extra cases. */
   rebuild?: boolean
@@ -89,6 +91,14 @@ export async function discover(project: Project, opts: DiscoverOptions): Promise
     report.sources.push(...result.files.map((f) => `${targetName}:${f}`))
     report.errors.push(...result.errors)
     for (const path of result.paths) counts.set(path, counts.get(path) ?? 0)
+  }
+  if (opts.traffic) {
+    const rows = project.store.traffic()
+    report.sources.push(`traffic (${rows.length} rows)`)
+    for (const r of rows) {
+      const path = r.path.split("?")[0] as string
+      counts.set(path, (counts.get(path) ?? 0) + r.views + r.entries)
+    }
   }
   if (opts.urls) {
     report.sources.push(opts.urls)

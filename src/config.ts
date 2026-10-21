@@ -6,39 +6,54 @@ export const CONFIG_FILE = "portside.config.json"
 export const LOCK_FILE = "portside.lock.json"
 export const STATE_DIR = ".portside"
 
+export const LEDGER_FILE = "portside.ledger.json"
+export const PROBES_DIR = "portside/probes"
+export const SOURCES_DIR = "portside/sources"
+
 const headers = z.record(z.string(), z.string())
 
-export const cachePolicy = z.enum(["must-match", "if-slower", "ignore"])
+export const fieldPolicy = z.enum(["must-match", "if-slower", "ignore"])
+export type FieldPolicy = z.infer<typeof fieldPolicy>
 
-export const DIRECTIONS = [
-  "hit",
-  "revalidate",
-  "cold",
-  "load",
-  "reload",
-  "navigate",
-  "scene",
-] as const
-export const direction = z.enum(DIRECTIONS)
-export type Direction = z.infer<typeof direction>
-export const BROWSER_DIRECTIONS: readonly Direction[] = ["load", "reload", "navigate"]
-export type CachePolicy = z.infer<typeof cachePolicy>
+// How a record field is judged. `order` lists values from worst to best, so a move up the list is
+// an improvement the ratchet keeps rather than a difference; `optional` skips the field whenever
+// either side lacks it, for a probe that only sometimes knows the answer.
+export const fieldSpec = z.union([
+  fieldPolicy,
+  z.object({
+    policy: fieldPolicy.default("must-match"),
+    order: z.array(z.string()).optional(),
+    optional: z.boolean().default(false),
+  }),
+])
+export type FieldSpec = z.infer<typeof fieldSpec>
 
 const target = z.object({
   url: z.string().url(),
   headers: headers.optional(),
+  cookies: headers.optional(),
   // A target that leaves the ratchet never tightens the lock, such as a local dev server whose
   // timings say nothing about production.
   ratchet: z.boolean().default(true),
-  // A shell command that empties this target's cache for one path, run before each cold request
-  // with PORTSIDE_URL, PORTSIDE_PATH and PORTSIDE_TARGET set.
-  purge: z.string().optional(),
-  // Sent by the browser directions as cookies on the target's own domain. Headers reach the
-  // browser too, but only by intercepting requests, which turns the browser's cache off.
-  cookies: z.record(z.string(), z.string()).optional(),
+  // Anything the project's probes want to know about this target, such as how to purge it.
+  options: z.record(z.string(), z.unknown()).default({}),
   note: z.string().optional(),
 })
 export type Target = z.infer<typeof target>
+
+const vantage = z.object({
+  // A runner started with `portside runner serve`; without one the vantage is this machine.
+  url: z.string().url().optional(),
+  token: z.string().optional(),
+  region: z.string().optional(),
+  // How probes on this vantage get a browser: a Chromium binary, or a CDP endpoint such as a
+  // Browser Run session.
+  browser: z
+    .object({ executablePath: z.string().optional(), cdp: z.string().optional() })
+    .default({}),
+  note: z.string().optional(),
+})
+export type Vantage = z.infer<typeof vantage>
 
 const allowance = z.object({
   id: z.string(),
@@ -55,39 +70,34 @@ export const configSchema = z.object({
   $schema: z.string().optional(),
   baseline: z.string(),
   targets: z.record(z.string(), target),
-  probe: z
+  vantages: z.record(z.string(), vantage).default({ local: { browser: {} } }),
+  // The share of readers each region holds, from `portside survey` or by hand, such as
+  // { "weur": 0.8, "enam": 0.15 }. Launch readiness weighs each route's result by it.
+  regions: z.record(z.string(), z.number()).default({}),
+  probes: z.string().default(PROBES_DIR),
+  sources: z.string().default(SOURCES_DIR),
+  survey: z
+    .object({
+      since: z.string().default("30d"),
+      // Handed to each source module as ctx.options, keyed by the module's name.
+      sources: z.record(z.string(), z.record(z.string(), z.unknown())).default({}),
+      weightBy: z.enum(["views", "entries"]).default("views"),
+    })
+    .prefault({}),
+  run: z
     .object({
       repeats: z.number().int().min(1).default(6),
       concurrency: z.number().int().min(1).default(4),
       timeoutMs: z.number().int().min(100).default(15_000),
-      // A regex whose first group changes on every fresh render, such as a render id in a meta tag.
-      renderStamp: z.string().optional(),
+    })
+    .prefault({}),
+  record: z
+    .object({
       headers: z.array(z.string()).default(["vary", "x-robots-tag"]),
       htmlCacheControl: z.boolean().default(false),
       errorsMatchOnStatus: z.boolean().default(true),
-      userAgent: z.string().optional(),
     })
     .prefault({}),
-  browser: z
-    .object({
-      executablePath: z.string().optional(),
-      headless: z.boolean().default(true),
-      repeats: z.number().int().min(1).default(5),
-      // How long the network has to stay quiet before a page counts as settled.
-      quietMs: z.number().int().min(0).default(300),
-    })
-    .prefault({}),
-  scenes: z
-    .record(
-      z.string(),
-      z.object({
-        command: z.string(),
-        // The metric in the scene's PORTSIDE_METRICS file that the timing verdict reads.
-        primary: z.string().default("durationMs"),
-        repeats: z.number().int().min(1).default(3),
-      }),
-    )
-    .default({}),
   perf: z
     .object({
       threshold: z.number().min(0).default(0.1),
@@ -100,12 +110,11 @@ export const configSchema = z.object({
       samplesPerRoute: z.number().int().min(1).default(3),
       minVariants: z.number().int().min(2).default(3),
       expand: z.record(z.string(), z.array(z.string())).default({}),
-      next: z.object({ dir: z.string().default(".next") }).optional(),
     })
     .prefault({}),
   defaults: z
     .object({
-      cachePolicy: cachePolicy.default("if-slower"),
+      probe: z.string().default("http"),
       weight: z.number().default(1),
     })
     .prefault({}),
@@ -113,7 +122,7 @@ export const configSchema = z.object({
 })
 export type Config = z.infer<typeof configSchema>
 
-const summarySchema = z.object({
+export const summarySchema = z.object({
   n: z.number(),
   min: z.number(),
   p25: z.number(),
@@ -123,12 +132,15 @@ const summarySchema = z.object({
 })
 
 export const expectSchema = z.object({
+  // The probe definition the lock was taken with. Numbers from another version measure something
+  // else, so they are not judged against it.
+  probe: z.object({ name: z.string(), hash: z.string() }).optional(),
   status: z.number().int().optional(),
   record: z.record(z.string(), z.union([z.string(), z.number()])).default({}),
-  cache: z.enum(["cached", "uncached"]).optional(),
-  ttfb: summarySchema.optional(),
-  // A ceiling on the median, not the p75.
-  ttfbMax: z.number().optional(),
+  metric: z.string().optional(),
+  timing: z.record(z.string(), summarySchema).default({}),
+  // Ceilings on the primary metric's median, set by hand, per vantage or `*` for all.
+  max: z.record(z.string(), z.number()).default({}),
   lockedFrom: z.string().optional(),
   lockedAt: z.string().optional(),
 })
@@ -145,13 +157,11 @@ const historyEntry = z.object({
 export type HistoryEntry = z.infer<typeof historyEntry>
 
 const caseSchema = z.object({
-  direction: direction.optional(),
+  probe: z.string().optional(),
+  conditions: z.record(z.string(), z.unknown()).optional(),
   headers: headers.optional(),
   query: z.string().optional(),
-  from: z.string().optional(),
-  link: z.string().optional(),
-  ready: z.string().optional(),
-  scene: z.string().optional(),
+  fields: z.record(z.string(), fieldSpec).optional(),
   note: z.string().optional(),
   expect: expectSchema.optional(),
   history: z.array(historyEntry).default([]),
@@ -161,7 +171,10 @@ export type CaseDef = z.infer<typeof caseSchema>
 const routeSchema = z.object({
   samples: z.array(z.string()).default([]),
   weight: z.number().optional(),
-  cachePolicy: cachePolicy.optional(),
+  traffic: z
+    .object({ views: z.number(), entries: z.number(), share: z.number(), entryShare: z.number() })
+    .optional(),
+  fields: z.record(z.string(), fieldSpec).optional(),
   source: z.string().optional(),
   declared: z.object({ mode: z.string(), revalidate: z.number().optional() }).optional(),
   note: z.string().optional(),
@@ -170,7 +183,7 @@ const routeSchema = z.object({
 export type RouteDef = z.infer<typeof routeSchema>
 
 export const lockSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   routes: z.record(z.string(), routeSchema).default({}),
 })
 export type Lock = z.infer<typeof lockSchema>
@@ -222,12 +235,13 @@ export function readConfig(root: string): Config {
   if (!config.targets[config.baseline]) {
     throw new Error(`baseline "${config.baseline}" is not one of the targets in ${CONFIG_FILE}`)
   }
+  if (Object.keys(config.vantages).length === 0) config.vantages = { local: { browser: {} } }
   return config
 }
 
 export function readLock(root: string): Lock {
   const file = join(root, LOCK_FILE)
-  if (!existsSync(file)) return { version: 1, routes: {} }
+  if (!existsSync(file)) return { version: 2, routes: {} }
   return parseFile(file, lockSchema)
 }
 

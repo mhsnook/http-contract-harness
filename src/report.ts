@@ -1,7 +1,11 @@
 import pc from "picocolors"
-import type { CaseVerdict, Evaluation, RouteVerdict, State } from "./verdict.ts"
+import type { TargetEvaluation } from "./status.ts"
+import type { CaseVerdict, RouteVerdict, State } from "./verdict.ts"
 
-export type TargetEvaluation = { target: string; evaluation: Evaluation }
+export type { TargetEvaluation }
+
+const label = (e: TargetEvaluation, many: boolean) => (many ? `${e.target}/${e.vantage}` : e.target)
+const manyVantages = (evals: TargetEvaluation[]) => new Set(evals.map((e) => e.vantage)).size > 1
 
 const GLYPH: Record<State, string> = { pass: "✓", warn: "!", fail: "✗", unknown: "·" }
 const COLOR: Record<State, (s: string) => string> = {
@@ -16,8 +20,13 @@ const show = (v: unknown) => (v === undefined ? "∅" : String(v))
 
 export function reasonOf(c: CaseVerdict): string {
   if (!c.observed) return "not run"
+  const error = c.contract.diffs.find((d) => d.field === "error")
+  if (error) return `error: ${show(error.actual)}`
+  if (c.stale) return "stale lock: the probe changed"
   if (c.reference === "none") return "unlocked"
-  const contract = c.contract.diffs.filter((d) => !d.allowed)
+  const contract = c.contract.diffs.filter(
+    (d) => !d.allowed && !d.improved && d.policy !== "ignore",
+  )
   if (c.contract.state === "fail" && contract[0]) {
     const d = contract[0]
     if (d.field === "error") return `error: ${show(d.actual)}`
@@ -30,8 +39,8 @@ export function reasonOf(c: CaseVerdict): string {
     const when = c.perf.paired === false ? " (another run)" : ""
     return `slower${than}: ${ms(c.perf.baseline?.median)} → ${ms(c.perf.actual?.median)}${when}`
   }
-  if (c.cache.state !== "pass" && c.cache.state !== "unknown") {
-    return `${c.cache.expected} → ${c.cache.actual}`
+  if (c.contract.state === "warn" && contract[0]) {
+    return `${contract[0].field} ${show(contract[0].expected)} → ${show(contract[0].actual)}, fast enough`
   }
   return ""
 }
@@ -62,9 +71,10 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
   const routes = new Map<string, RouteVerdict>()
   for (const { evaluation } of evals)
     for (const r of evaluation.routes) if (!routes.has(r.route)) routes.set(r.route, r)
-  const byTarget = evals.map(({ target, evaluation }) => ({
-    target,
-    map: new Map(evaluation.routes.map((r) => [r.route, r])),
+  const many = manyVantages(evals)
+  const byTarget = evals.map((e) => ({
+    target: label(e, many),
+    map: new Map(e.evaluation.routes.map((r) => [r.route, r])),
   }))
 
   const rows = [...routes.values()]
@@ -73,10 +83,10 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
     .sort((a, b) => b.route.weight - a.route.weight || a.route.route.localeCompare(b.route.route))
 
   const lines: string[] = []
-  for (const { target, evaluation } of evals) {
-    const c = evaluation.counts
+  for (const e of evals) {
+    const c = e.evaluation.counts
     lines.push(
-      `${pc.bold(target.padEnd(12))} ${pc.green(`${c.pass} pass`)}  ${pc.yellow(`${c.warn} warn`)}  ${pc.red(`${c.fail} fail`)}  ${pc.dim(`${c.unknown} unknown`)}`,
+      `${pc.bold(label(e, many).padEnd(16))} ${pc.green(`${c.pass} pass`)}  ${pc.yellow(`${c.warn} warn`)}  ${pc.red(`${c.fail} fail`)}  ${pc.dim(`${c.unknown} unknown`)}`,
     )
   }
   if (rows.length === 0) {
@@ -98,7 +108,7 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
         "  " +
         "WEIGHT".padStart(7) +
         "  " +
-        evals.map((e) => e.target.padEnd(cellWidth)).join("  "),
+        evals.map((e) => label(e, many).padEnd(cellWidth)).join("  "),
     ),
   )
   for (const row of rows) {
@@ -139,41 +149,47 @@ export function unusedEverywhere(evals: TargetEvaluation[]): string[] {
 
 export function describeCase(target: string, c: CaseVerdict): string[] {
   const lines = [
-    `  ${COLOR[c.state](`${GLYPH[c.state]} ${target}`)} ${pc.dim(`(against ${c.reference})`)}`,
+    `  ${COLOR[c.state](`${GLYPH[c.state]} ${target}`)} ${pc.dim(`(${c.probe}, against ${c.reference})`)}`,
   ]
   if (!c.observed) return [...lines, pc.dim("    not run yet")]
+  if (c.stale) lines.push(pc.yellow(`    ${c.stale}`))
   for (const d of c.contract.diffs) {
     const text = `    ${d.field}: ${show(d.expected)} → ${show(d.actual)}  ${pc.dim(d.sample)}`
-    lines.push(d.allowed ? pc.dim(`${text} (allowed: ${d.allowed})`) : pc.red(text))
+    if (d.allowed) lines.push(pc.dim(`${text} (allowed: ${d.allowed})`))
+    else if (d.improved) lines.push(pc.green(`${text} (better)`))
+    else if (d.policy === "ignore") lines.push(pc.dim(`${text} (ignored)`))
+    else if (d.policy === "if-slower") lines.push(pc.yellow(`${text} (matters only if slower)`))
+    else lines.push(pc.red(text))
   }
-  const cache = `    cache: ${c.cache.expected ?? "∅"} → ${c.cache.actual}  ${pc.dim(c.cache.signal ?? "")}`
-  lines.push(COLOR[c.cache.state](cache) + (c.cache.note ? pc.dim(` (${c.cache.note})`) : ""))
+  if (c.contract.note) lines.push(pc.dim(`    ${c.contract.note}`))
   const a = c.perf.actual
   const perf = a
-    ? `    ${c.perf.metric ?? "ttfb"}: median ${ms(a.median)}, p75 ${ms(a.p75)} (n=${a.n})` +
+    ? `    ${c.perf.metric}: median ${ms(a.median)}, p75 ${ms(a.p75)} (n=${a.n})` +
       (c.perf.baseline
         ? `; ${c.perf.against ?? "reference"}${c.perf.paired ? " in the same batch" : c.perf.paired === false ? " from another run" : ""} median ${ms(c.perf.baseline.median)}, p75 ${ms(c.perf.baseline.p75)}: ${c.perf.call}`
         : "") +
       (c.perf.max !== undefined ? `; max median ${ms(c.perf.max)}` : "") +
       (c.perf.note ? `; ${c.perf.note}` : "")
-    : `    ${c.perf.metric ?? "ttfb"}: –`
+    : `    ${c.perf.metric}: –`
   lines.push(COLOR[c.perf.state](perf))
   return lines
 }
 
 export function markdownStatus(evals: TargetEvaluation[]): string {
   const out: string[] = ["## Port status", ""]
+  const many = manyVantages(evals)
   out.push("| Target | Pass | Warn | Fail | Unknown |", "| --- | --: | --: | --: | --: |")
-  for (const { target, evaluation: e } of evals) {
+  for (const t of evals) {
+    const e = t.evaluation
     out.push(
-      `| ${target} | ${e.counts.pass} | ${e.counts.warn} | ${e.counts.fail} | ${e.counts.unknown} |`,
+      `| ${label(t, many)} | ${e.counts.pass} | ${e.counts.warn} | ${e.counts.fail} | ${e.counts.unknown} |`,
     )
   }
-  const failing = evals.flatMap(({ target, evaluation }) =>
-    evaluation.routes.flatMap((r) =>
+  const failing = evals.flatMap((t) =>
+    t.evaluation.routes.flatMap((r) =>
       r.cases
         .filter((c) => c.state === "fail" || c.state === "warn")
-        .map((c) => ({ target, route: r, c })),
+        .map((c) => ({ target: label(t, many), route: r, c })),
     ),
   )
   failing.sort((a, b) => b.route.weight - a.route.weight)

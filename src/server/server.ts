@@ -1,9 +1,11 @@
 import { readFileSync, statSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { join } from "node:path"
-import { CONFIG_FILE, LOCK_FILE, readConfig, readLock } from "../config.ts"
+import { CONFIG_FILE, LEDGER_FILE, LOCK_FILE, readConfig, readLock } from "../config.ts"
 import type { Project } from "../project.ts"
 import { lock, loosen, ratchet } from "../ratchet.ts"
+import { readLedger } from "../ledger.ts"
+import { planOf } from "../plan.ts"
 import { runBatch } from "../run.ts"
 import { compareRefs, statusOf } from "../status.ts"
 
@@ -46,17 +48,16 @@ export async function serve(project: Project, opts: { port: number; host: string
 
   const lockFile = join(project.root, LOCK_FILE)
   const configFile = join(project.root, CONFIG_FILE)
-  let seen = {
+  const ledgerFile = join(project.root, LEDGER_FILE)
+  const snapshot = () => ({
     observation: project.store.maxObservationId(),
     lock: mtime(lockFile),
     config: mtime(configFile),
-  }
+    ledger: mtime(ledgerFile),
+  })
+  let seen = snapshot()
   const watcher = setInterval(() => {
-    const now = {
-      observation: project.store.maxObservationId(),
-      lock: mtime(lockFile),
-      config: mtime(configFile),
-    }
+    const now = snapshot()
     if (now.lock !== seen.lock) {
       try {
         project.lock = readLock(project.root)
@@ -74,7 +75,8 @@ export async function serve(project: Project, opts: { port: number; host: string
     if (
       now.observation !== seen.observation ||
       now.lock !== seen.lock ||
-      now.config !== seen.config
+      now.config !== seen.config ||
+      now.ledger !== seen.ledger
     ) {
       broadcast("change", { running })
     }
@@ -88,7 +90,7 @@ export async function serve(project: Project, opts: { port: number; host: string
         targets,
         label,
         routes: route ? (p) => p === route || p.startsWith(route) : undefined,
-        onObservation: (_, __, done, total) => {
+        onObservation: (_, done, total) => {
           if (!running) return
           running.done = done
           running.total = total
@@ -103,7 +105,14 @@ export async function serve(project: Project, opts: { port: number; host: string
     }
   }
 
-  const state = () => ({
+  const state = async () => ({
+    plan: await planOf(project),
+    ledger: readLedger(project.root),
+    vantages: Object.entries(project.config.vantages).map(([name, v]) => ({
+      name,
+      region: v.region ?? null,
+      remote: Boolean(v.url),
+    })),
     project: {
       root: project.root,
       baseline: project.config.baseline,
@@ -113,7 +122,7 @@ export async function serve(project: Project, opts: { port: number; host: string
         ratchet: t.ratchet,
       })),
     },
-    status: statusOf(project),
+    status: await statusOf(project),
     runs: project.store.runs(15),
     running,
   })
@@ -136,16 +145,19 @@ export async function serve(project: Project, opts: { port: number; host: string
         req.on("close", () => clients.delete(res))
         return
       }
-      if (req.method === "GET" && url.pathname === "/api/state") return send(res, 200, state())
+      if (req.method === "GET" && url.pathname === "/api/state")
+        return send(res, 200, await state())
       if (req.method === "GET" && url.pathname === "/api/route") {
         const pattern = url.searchParams.get("pattern") ?? ""
         const route = project.lock.routes[pattern]
         if (!route) return send(res, 404, { error: `${pattern} is not in the lock` })
         const observations = Object.fromEntries(
-          Object.keys(project.config.targets).map((t) => [
-            t,
-            project.store.latestFor(t).filter((o) => o.route === pattern),
-          ]),
+          Object.keys(project.config.targets).flatMap((t) =>
+            Object.keys(project.config.vantages).map((v) => [
+              `${t}/${v}`,
+              project.store.latestFor(t, v).filter((o) => o.route === pattern),
+            ]),
+          ),
         )
         return send(res, 200, { pattern, route, observations })
       }
@@ -153,7 +165,7 @@ export async function serve(project: Project, opts: { port: number; host: string
         return send(
           res,
           200,
-          compareRefs(
+          await compareRefs(
             project,
             url.searchParams.get("before") ?? "",
             url.searchParams.get("after") ?? "",
@@ -175,7 +187,7 @@ export async function serve(project: Project, opts: { port: number; host: string
       if (req.method === "POST" && url.pathname === "/api/lock") {
         const input = await body(req)
         const keys: string[] | undefined = input.keys
-        const changes = lock(project, {
+        const changes = await lock(project, {
           from: input.from ?? project.config.baseline,
           only: keys ? (key) => keys.includes(key) : undefined,
           force: Boolean(input.force),
@@ -186,7 +198,7 @@ export async function serve(project: Project, opts: { port: number; host: string
       }
       if (req.method === "POST" && url.pathname === "/api/ratchet") {
         const input = await body(req)
-        const changes = ratchet(project, { dryRun: Boolean(input.dryRun) })
+        const changes = await ratchet(project, { dryRun: Boolean(input.dryRun) })
         broadcast("change", { running })
         return send(res, 200, changes)
       }

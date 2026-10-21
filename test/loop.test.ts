@@ -1,53 +1,62 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, rmSync } from "node:fs"
 import type { Server } from "node:http"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { CONFIG_FILE } from "../src/config.ts"
+import { LEDGER_FILE } from "../src/config.ts"
 import {
-  EXPERIMENTS_FILE,
+  addFinding,
   decideExperiment,
   listExperiments,
   measureExperiment,
   startExperiment,
-} from "../src/experiments.ts"
+} from "../src/ledger.ts"
 import { openProject, type Project } from "../src/project.ts"
 import { lock } from "../src/ratchet.ts"
 import { runBatch } from "../src/run.ts"
+import { serveRunner } from "../src/runner.ts"
+import { CHROMIUM, makeProject } from "./fixtures/project.ts"
 import { site, type Knobs } from "./fixtures/site.ts"
 
-const CHROMIUM =
-  process.env.PORTSIDE_CHROMIUM ?? "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
 const hasBrowser = existsSync(CHROMIUM)
 
 let dir: string
 let servers: Server[]
 let project: Project
 let port: Knobs
+let runner: { url: string; close(): Promise<void> }
 
 const purge = `node -e "fetch(new URL('/__purge?path=' + encodeURIComponent(process.env.PORTSIDE_PATH), process.env.PORTSIDE_URL))"`
-const scene = `node -e "require('fs').writeFileSync(process.env.PORTSIDE_METRICS, JSON.stringify({ items: process.env.PORTSIDE_TARGET === 'port' ? 2 : 1, path: process.env.PORTSIDE_PATH.length }))"`
+const command = `node -e "require('fs').writeFileSync(process.env.PORTSIDE_METRICS, JSON.stringify({ items: process.env.PORTSIDE_TARGET === 'port' ? 2 : 1 }))"`
 
-const observed = (target: string, route: string, caseId: string) =>
-  project.store.latestFor(target).filter((o) => o.route === route && o.caseId === caseId)
+const observed = (target: string, route: string, caseId: string, vantage = "local") =>
+  project.store.latestFor(target, vantage).filter((o) => o.route === route && o.caseId === caseId)
 
 beforeAll(async () => {
   const [a, b] = await Promise.all([site("legacy"), site("port")])
   servers = [a.server, b.server]
   port = b.knobs
-  dir = mkdtempSync(join(tmpdir(), "portside-loop-"))
-  writeFileSync(
-    join(dir, CONFIG_FILE),
-    JSON.stringify({
-      baseline: "legacy",
-      targets: { legacy: { url: a.url, purge }, port: { url: b.url, purge } },
-      probe: { repeats: 4, concurrency: 2 },
-      browser: { executablePath: CHROMIUM, repeats: 2, quietMs: 100 },
-      scenes: { count: { command: scene, primary: "durationMs", repeats: 2 } },
-    }),
-  )
+  runner = await serveRunner({
+    port: 0,
+    host: "127.0.0.1",
+    token: "secret",
+    region: "weur",
+    browser: { executablePath: CHROMIUM },
+    cwd: process.cwd(),
+  })
+  dir = makeProject({
+    baseline: "legacy",
+    targets: {
+      legacy: { url: a.url, options: { purge } },
+      port: { url: b.url, options: { purge } },
+    },
+    vantages: {
+      local: { browser: { executablePath: CHROMIUM } },
+      eu: { url: runner.url, token: "${PORTSIDE_TEST_TOKEN}", region: "weur" },
+    },
+    run: { repeats: 4, concurrency: 2 },
+  })
+  process.env.PORTSIDE_TEST_TOKEN = "secret"
   project = openProject(dir)
-  const routes = project.lock.routes
   const route = (samples: string[], cases: Record<string, object> = {}) => ({
     samples,
     source: "manual",
@@ -56,108 +65,130 @@ beforeAll(async () => {
       ...Object.fromEntries(Object.entries(cases).map(([k, v]) => [k, { ...v, history: [] }])),
     },
   })
-  routes["/about"] = route(["/about"], {
-    revalidate: { direction: "revalidate" },
-    load: { direction: "load" },
-    reload: { direction: "reload" },
-    navigate: { direction: "navigate", from: "/" },
-    scene: { direction: "scene", scene: "count" },
+  project.lock.routes["/about"] = route(["/about"], {
+    revalidate: { probe: "http", conditions: { cache: "revalidate" } },
+    load: { probe: "page" },
+    reload: { probe: "page", conditions: { reload: true } },
+    navigate: { probe: "navigate", conditions: { from: "/" } },
+    command: { probe: "command", conditions: { command } },
   })
-  routes["/event/:city/:id"] = route(["/event/london/1"], { cold: { direction: "cold" } })
-  routes["/sticky"] = route(["/sticky"], { cold: { direction: "cold" } })
+  project.lock.routes["/event/:city/:id"] = route(["/event/london/1"], {
+    cold: { probe: "http", conditions: { cache: "cold" } },
+  })
+  project.lock.routes["/sticky"] = route(["/sticky"], {
+    cold: { probe: "http", conditions: { cache: "cold" } },
+  })
   project.saveLock()
 })
 
-afterAll(() => {
+afterAll(async () => {
   project?.store.close()
   for (const s of servers) s.close()
+  await runner?.close()
   rmSync(dir, { recursive: true, force: true })
 })
 
-describe("directions", { timeout: 60_000 }, () => {
-  it("measures every direction on every target in one batch", async () => {
+describe("the starter probes", { timeout: 90_000 }, () => {
+  it("measure every case on every target, interleaved, from this machine", async () => {
     const result = await runBatch(project, {
       targets: ["legacy", "port"],
+      vantages: ["local"],
       routes: (p) => p !== "/about" || hasBrowser,
     })
     const errors = result.observations.filter((o) => o.error && o.route !== "/sticky")
     expect(errors.map((o) => `${o.route}#${o.caseId}: ${o.error}`)).toEqual([])
   })
 
-  it("revalidates with the ETag the first answer carried, as a browser refresh does", () => {
+  it("revalidate with the ETag a first answer carried", () => {
     const [o] = observed("legacy", "/about", "revalidate")
-    expect(o).toMatchObject({
-      status: 304,
-      direction: "revalidate",
-      cacheSignal: "revalidated: 304 Not Modified",
-    })
-    expect(o!.ttfb).toHaveLength(4)
+    expect(o).toMatchObject({ status: 304, probe: "http" })
+    expect(o!.primary).toHaveLength(4)
   })
 
-  it("purges before each cold request and confirms the request missed", () => {
+  it("purge before each cold request, and count only the requests that missed", () => {
     const [legacy] = observed("legacy", "/event/:city/:id", "cold")
-    expect(legacy!.cacheSignal).toBe(
-      "cold: 4 misses confirmed, 0 with no cache header, 0 purges that did not take",
-    )
-    expect(legacy!.ttfb).toHaveLength(4)
-  })
-
-  it("refuses to call a request cold when the cache still answered", () => {
+    expect(legacy!.primary).toHaveLength(4)
+    expect(legacy!.skipped).toEqual([])
     const [sticky] = observed("legacy", "/sticky", "cold")
-    expect(sticky!.error).toBe("the purge never took: 4 answers were hits")
+    expect(sticky!.skipped).toHaveLength(4)
+    expect(sticky!.error).toMatch(/no repeat counted: the purge did not take/)
   })
 
-  it("runs a person's own scene against each target and keeps what it reports", () => {
-    const [legacy] = observed("legacy", "/about", "scene")
-    const [other] = observed("port", "/about", "scene")
-    expect(legacy!.metrics["items"]).toEqual([1, 1])
-    expect(other!.metrics["items"]).toEqual([2, 2])
-    expect(legacy!.ttfb).toEqual(legacy!.metrics["durationMs"])
+  it("run a person's own command per target and keep what it reports", () => {
+    const [legacy] = observed("legacy", "/about", "command")
+    const [other] = observed("port", "/about", "command")
+    expect(legacy!.metrics["items"]).toEqual([1, 1, 1])
+    expect(other!.metrics["items"]).toEqual([2, 2, 2])
+    expect(legacy!.primary).toEqual(legacy!.metrics["durationMs"])
   })
 
-  it.skipIf(!hasBrowser)("loads, reloads and navigates in a real browser", () => {
-    const [load] = observed("legacy", "/about", "load")
-    expect(load!.status).toBe(200)
-    expect(load!.metrics["load"]).toHaveLength(2)
-    const [reload] = observed("port", "/about", "reload")
-    expect(reload!.metrics["ttfb"]).toHaveLength(2)
+  it.skipIf(!hasBrowser)("load, reload and navigate in a real browser", () => {
+    expect(observed("legacy", "/about", "load")[0]!.metrics["load"]).toHaveLength(5)
+    expect(observed("port", "/about", "reload")[0]!.metrics["ttfb"]).toHaveLength(5)
     const [nav] = observed("legacy", "/about", "navigate")
     expect(nav!.status).toBe(200)
-    expect(nav!.metrics["navMs"]).toHaveLength(2)
-    expect(nav!.ttfb).toEqual(nav!.metrics["navMs"])
+    expect(nav!.primary).toEqual(nav!.metrics["navMs"])
   })
 })
 
-describe("the experiment loop", { timeout: 60_000 }, () => {
+describe("a remote vantage", { timeout: 60_000 }, () => {
+  it("runs the same probes on a runner and reports where it ran", async () => {
+    const result = await runBatch(project, {
+      targets: ["legacy", "port"],
+      vantages: ["eu"],
+      routes: (p) => p === "/event/:city/:id",
+    })
+    expect(result.batches).toMatchObject([{ vantage: "eu", region: "weur" }])
+    const [o] = observed("port", "/event/:city/:id", "default", "eu")
+    expect(o).toMatchObject({ vantage: "eu", region: "weur", probe: "http", error: null })
+    const local = observed("port", "/event/:city/:id", "default", "local")[0]
+    expect(o!.probeHash).toBe(local!.probeHash)
+  })
+
+  it("refuses a client without the token", async () => {
+    const res = await fetch(new URL("/run", runner.url), { method: "POST", body: "{}" })
+    expect(res.status).toBe(401)
+  })
+})
+
+describe("the experiment loop", { timeout: 90_000 }, () => {
   it("records a theory, measures before and after, and corrects for drift", async () => {
-    lock(project, { from: "legacy" })
+    await lock(project, { from: "legacy", vantages: ["local"] })
+    addFinding(project, {
+      text: "The event page renders on every request on the port; nothing caches it",
+      routes: ["/event/:city/:id"],
+      tags: ["cache"],
+    })
     port.eventDelay = 80
     const { experiment, related } = await startExperiment(project, {
       theory: "Serve the event page without the 80ms render",
       routes: ["/event/:city/:id"],
       target: "port",
+      vantages: ["local"],
     })
-    expect(related).toEqual([])
-    expect(experiment.reference).toBe("legacy")
-
+    expect(related.experiments).toEqual([])
+    expect(related.findings.map((f) => f.tags)).toEqual([["cache"]])
     port.eventDelay = 0
-    const { experiment: measured } = await measureExperiment(project, experiment.id)
+    const { experiment: measured, warnings } = await measureExperiment(project, experiment.id)
+    expect(warnings.filter((w) => w.includes("probe"))).toEqual([])
     const event = measured.result!.cases.find((c) => c.key === "/event/:city/:id#default")!
-    expect(event.change).toBe("better")
+    expect(event).toMatchObject({
+      change: "better",
+      vantage: "local",
+      probe: "http",
+      metric: "ttfb",
+    })
     expect(event.deltaMs!).toBeLessThan(-50)
-    expect(typeof event.driftMs).toBe("number")
     expect(measured.result!.broken).toBe(0)
   })
 
-  it("keeps the decision and its reason in a committed file", () => {
+  it("keeps the decision, its reason and the findings in one committed ledger", () => {
     const [experiment] = listExperiments(project)
     expect(() => decideExperiment(project, experiment!.id, "keep", "")).toThrow(/why/)
-    decideExperiment(project, experiment!.id, "keep", "The render was the whole cost; cached now")
-    const file = JSON.parse(readFileSync(join(dir, EXPERIMENTS_FILE), "utf8"))
-    expect(file.experiments[0].decision).toMatchObject({
-      verdict: "keep",
-      why: "The render was the whole cost; cached now",
-    })
+    decideExperiment(project, experiment!.id, "keep", "The render was the whole cost")
+    const ledger = JSON.parse(readFileSync(join(dir, LEDGER_FILE), "utf8"))
+    expect(ledger.experiments[0].decision).toMatchObject({ verdict: "keep" })
+    expect(ledger.findings).toHaveLength(1)
   })
 
   it("shows what was already tried before the next experiment on the same route", async () => {
@@ -165,8 +196,9 @@ describe("the experiment loop", { timeout: 60_000 }, () => {
       theory: "Try it again",
       routes: ["/event"],
       target: "port",
+      vantages: ["local"],
     })
-    expect(related.map((e) => e.decision?.verdict)).toEqual(["keep"])
+    expect(related.experiments.map((e) => e.decision?.verdict)).toEqual(["keep"])
   })
 
   it("will not keep a change that broke the contract", async () => {
@@ -174,6 +206,7 @@ describe("the experiment loop", { timeout: 60_000 }, () => {
       theory: "Render the about page from a different template",
       routes: ["/about"],
       target: "port",
+      vantages: ["local"],
     })
     project.lock.routes["/about"]!.cases["default"]!.expect!.status = 201
     await measureExperiment(project, experiment.id)

@@ -346,6 +346,7 @@
     </header>
     <main>
       <div class="problem" id="problem"></div>
+      <section class="card" id="plan" style="margin-bottom: 16px"></section>
       <section class="targets" id="targets"></section>
       <div class="toolbar" style="margin-bottom: 10px">
         <input
@@ -395,8 +396,11 @@
 
       function reason(c) {
         if (!c.observed) return "not run"
+        const error = c.contract.diffs.find((d) => d.field === "error")
+        if (error) return "error: " + error.actual
+        if (c.stale) return "stale lock: the probe changed"
         if (c.reference === "none") return "unlocked"
-        const d = c.contract.diffs.find((d) => !d.allowed)
+        const d = c.contract.diffs.find((d) => !d.allowed && !d.improved && d.policy !== "ignore")
         if (c.contract.state === "fail" && d)
           return d.field === "error"
             ? "error: " + d.actual
@@ -405,8 +409,8 @@
           return c.perf.call !== "worse"
             ? `median ${ms(c.perf.actual?.median)} > max ${ms(c.perf.max)}`
             : `slower${c.perf.against ? " than " + c.perf.against : ""}: ${ms(c.perf.baseline?.median)} → ${ms(c.perf.actual?.median)}${c.perf.paired === false ? " (another run)" : ""}`
-        if (c.cache.state === "warn" || c.cache.state === "fail")
-          return `${c.cache.expected} → ${c.cache.actual}`
+        if (c.contract.state === "warn" && d)
+          return `${d.field}: ${d.expected ?? "∅"} → ${d.actual ?? "∅"}, fast enough`
         return ""
       }
 
@@ -417,16 +421,47 @@
         }
       }
 
+      const many = () => new Set(state.status.map((s) => s.vantage)).size > 1
+      const col = (s) => (many() ? `${s.target}/${s.vantage}` : s.target)
+
+      function renderPlan() {
+        const p = state.plan
+        const phase = p.phases.find((x) => x.id === p.phase)
+        const strip = p.phases
+          .map(
+            (x) =>
+              `<span class="pill ${x.done ? "pass" : x.id === p.phase ? "warn" : "unknown"}">${x.done ? "✓" : x.id === p.phase ? "→" : "·"} ${esc(x.id)}</span>`,
+          )
+          .join(" ")
+        const open = state.ledger.experiments.filter((e) => !e.decision)
+        const decided = state.ledger.experiments
+          .filter((e) => e.decision)
+          .slice(-5)
+          .reverse()
+        const findings = state.ledger.findings.slice(-5).reverse()
+        $("plan").innerHTML =
+          `<h2><span>${esc(phase.title)}</span><span class="sub">readiness ${Math.round(p.readiness.score * 100)}%</span></h2>
+          <div style="margin:6px 0 10px">${strip}</div>
+          <div class="grid">
+            <div>${phase.checks.map((c) => `<div class="${c.ok ? "pass" : "fail"}">${c.ok ? "✓" : "✗"} ${esc(c.text)}</div>`).join("")}
+              ${phase.next.map((n) => `<div class="sub mono">next: ${esc(n)}</div>`).join("")}</div>
+            <div><div class="sub">Experiments</div>${open.map((e) => `<div class="warn">${esc(e.id)}: ${esc(e.theory)}</div>`).join("")}
+              ${decided.map((e) => `<div class="${e.decision.verdict === "keep" ? "pass" : "unknown"}">${esc(e.decision.verdict)} · ${esc(e.theory)}<div class="sub">${esc(e.decision.why)}</div></div>`).join("") || (open.length ? "" : '<div class="sub">none yet</div>')}</div>
+            <div><div class="sub">Findings</div>${findings.map((f) => `<div>${esc(f.text)}</div>`).join("") || '<div class="sub">none yet</div>'}</div>
+          </div>`
+      }
+
       function renderTargets() {
         $("targets").innerHTML = state.status
-          .map(({ target, evaluation: e }) => {
+          .map((s) => {
+            const { target, evaluation: e } = s
             const t = state.project.targets.find((x) => x.name === target)
             const total = Object.values(e.counts).reduce((a, b) => a + b, 0) || 1
             const seg = (k) =>
               `<span class="bg-${k}" style="width:${(e.counts[k] / total) * 100}%;background:var(--${k})"></span>`
-            const last = state.runs.find((r) => r.target === target)
+            const last = state.runs.find((r) => r.target === target && r.vantage === s.vantage)
             return `<div class="card">
-      <h2><span>${esc(target)}${target === state.project.baseline ? ' <span class="pill unknown">baseline</span>' : ""}</span>
+      <h2><span>${esc(col(s))}${target === state.project.baseline ? ' <span class="pill unknown">baseline</span>' : ""}</span>
       <button data-run="${esc(target)}">Run</button></h2>
       <div class="sub mono">${esc(t?.url)}</div>
       <div class="counts"><span class="pass">${e.counts.pass} pass</span><span class="warn">${e.counts.warn} warn</span><span class="fail">${e.counts.fail} fail</span><span class="unknown">${e.counts.unknown} unknown</span></div>
@@ -464,7 +499,7 @@
 
       function renderTable() {
         $("head").innerHTML =
-          `<tr><th>Route</th><th style="text-align:right">Weight</th><th>Declared</th>${state.status.map((s) => `<th>${esc(s.target)}</th>`).join("")}</tr>`
+          `<tr><th>Route</th><th style="text-align:right">Weight</th><th>Declared</th>${state.status.map((s) => `<th>${esc(col(s))}</th>`).join("")}</tr>`
         const list = rows()
         if (list.length === 0) {
           const none = state.status[0]?.evaluation.routes.length === 0
@@ -506,9 +541,9 @@
         ]
         const body = caseIds
           .map((id) => {
-            const per = state.status.map(({ target, evaluation }) => [
-              target,
-              evaluation.routes
+            const per = state.status.map((s) => [
+              col(s),
+              s.evaluation.routes
                 .find((r) => r.route === pattern)
                 ?.cases.find((c) => c.caseId === id),
             ])
@@ -516,20 +551,29 @@
             return `<div class="case"><h3 class="mono">#${esc(id)} <button data-lock-case="${esc(key)}" style="font-size:12px;padding:2px 8px">Re-lock from baseline…</button></h3><div class="grid">${per
               .map(([target, c]) => {
                 if (!c) return ""
+                const kind = (d) =>
+                  d.allowed
+                    ? ["unknown", "allowed: " + d.allowed]
+                    : d.improved
+                      ? ["pass", "better"]
+                      : d.policy === "ignore"
+                        ? ["unknown", "ignored"]
+                        : d.policy === "if-slower"
+                          ? ["warn", "matters only if slower"]
+                          : ["fail", ""]
                 const diffs = c.contract.diffs
-                  .map(
-                    (d) =>
-                      `<div class="${d.allowed ? "unknown" : "fail"}"><code>${esc(d.field)}</code> ${esc(d.expected ?? "∅")} → ${esc(d.actual ?? "∅")}${d.allowed ? " (allowed: " + esc(d.allowed) + ")" : ""} <span class="sub">${esc(d.sample)}</span></div>`,
-                  )
+                  .map((d) => {
+                    const [cls, why] = kind(d)
+                    return `<div class="${cls}"><code>${esc(d.field)}</code> ${esc(d.expected ?? "∅")} → ${esc(d.actual ?? "∅")}${why ? " (" + esc(why) + ")" : ""} <span class="sub">${esc(d.sample)}</span></div>`
+                  })
                   .join("")
                 const a = c.perf.actual
                 return `<div class="card"><h2><span>${esc(target)}</span><span class="pill ${c.state}">${GLYPH[c.state]} ${c.state}</span></h2>
-        <div class="sub">against ${esc(c.reference)}</div>
+        <div class="sub">${esc(c.probe)}, against ${esc(c.reference)}${c.stale ? " · " + esc(c.stale) : ""}</div>
         <dl class="kv" style="margin-top:8px">
-          <dt>contract</dt><dd class="${c.contract.state}">${c.contract.state}${diffs ? "" : c.observed ? " · every field matches" : ""}</dd>
+          <dt>contract</dt><dd class="${c.contract.state}">${c.contract.state}${diffs ? "" : c.stale ? " · not compared: the lock is stale" : c.observed ? " · every field matches" : ""}${c.contract.note ? `<div class="sub">${esc(c.contract.note)}</div>` : ""}</dd>
           ${diffs ? `<dt></dt><dd>${diffs}</dd>` : ""}
-          <dt>cache</dt><dd class="${c.cache.state}">${esc(c.cache.expected ?? "∅")} → ${esc(c.cache.actual)}<div class="sub">${esc(c.cache.signal ?? "")}${c.cache.note ? " · " + esc(c.cache.note) : ""}</div></dd>
-          <dt>${esc(c.perf.metric ?? "ttfb")}</dt><dd class="${c.perf.state}">${a ? `median ${ms(a.median)} · p75 ${ms(a.p75)} · n=${a.n}` : "–"}<div class="sub">${c.perf.baseline ? `${esc(c.perf.against ?? "reference")}${c.perf.paired ? " (same batch)" : c.perf.paired === false ? " (another run)" : ""}: median ${ms(c.perf.baseline.median)} · p75 ${ms(c.perf.baseline.p75)} · ${c.perf.call}` : ""}${c.perf.max != null ? ` · max median ${ms(c.perf.max)}` : ""}${c.perf.note ? `<br>${esc(c.perf.note)}` : ""}</div></dd>
+          <dt>${esc(c.perf.metric)}</dt><dd class="${c.perf.state}">${a ? `median ${ms(a.median)} · p75 ${ms(a.p75)} · n=${a.n}` : "–"}<div class="sub">${c.perf.baseline ? `${esc(c.perf.against ?? "reference")}${c.perf.paired ? " (same batch)" : c.perf.paired === false ? " (another run)" : ""}: median ${ms(c.perf.baseline.median)} · p75 ${ms(c.perf.baseline.p75)} · ${c.perf.call}` : ""}${c.perf.max != null ? ` · max median ${ms(c.perf.max)}` : ""}${c.perf.note ? `<br>${esc(c.perf.note)}` : ""}</div></dd>
         </dl></div>`
               })
               .join("")}</div></div>`
@@ -540,6 +584,7 @@
 
       function render() {
         $("root").textContent = state.project.root
+        renderPlan()
         renderTargets()
         renderTable()
         const r = state.running

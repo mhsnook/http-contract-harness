@@ -1,14 +1,14 @@
-import type { CacheClass } from "./cache.ts"
 import {
   caseKey,
   type Allowance,
-  type CachePolicy,
   type Config,
   type Expect,
+  type FieldPolicy,
+  type FieldSpec,
   type Lock,
 } from "./config.ts"
 import type { Observation } from "./db.ts"
-import { casesOf, weightOf } from "./project.ts"
+import { casesOf, probeOf, weightOf } from "./project.ts"
 import { commonRecord, type ResponseRecord } from "./record.ts"
 import { callChange, summarise, type PerfCall, type Summary } from "./stats.ts"
 
@@ -19,27 +19,32 @@ export type FieldDiff = {
   field: string
   expected?: string | number
   actual?: string | number
+  policy?: FieldPolicy
   allowed?: string
+  improved?: boolean
 }
 
 export type CaseVerdict = {
   key: string
   route: string
   caseId: string
+  probe: string
+  vantage: string
   reference: "lock" | "baseline" | "none"
+  // Set when the lock was taken with a different version of the probe than the one that measured.
+  stale?: string
   state: State
   observed: boolean
-  contract: { state: State; diffs: FieldDiff[] }
-  cache: { state: State; expected?: CacheClass; actual: CacheClass; signal?: string; note?: string }
+  contract: { state: State; diffs: FieldDiff[]; note?: string }
   perf: {
     state: State
+    metric: string
     actual?: Summary
     baseline?: Summary
     against?: string
     paired?: boolean
     call?: PerfCall
     max?: number
-    metric?: string
     note?: string
   }
 }
@@ -54,10 +59,13 @@ export type RouteVerdict = {
 }
 
 export type Evaluation = {
+  vantage: string
   routes: RouteVerdict[]
   counts: Record<State, number>
   unusedAllowances: string[]
 }
+
+export type ProbeInfo = { hash: string; primary: string; fields?: Record<string, FieldSpec> }
 
 const RANK: Record<State, number> = { unknown: 0, pass: 1, warn: 2, fail: 3 }
 
@@ -67,14 +75,8 @@ export function worst(states: State[]): State {
   return seen.reduce((a, b) => (RANK[b] > RANK[a] ? b : a))
 }
 
-// Only a hit's first request may have filled a cache: cold, revalidating, browser and scene samples
-// each stand on their own.
-export const warmTimings = (o: Observation) =>
-  o.direction === "hit" && o.ttfb.length > 1 ? o.ttfb.slice(1) : o.ttfb
-
-function regexMatches(source: string | undefined, value: string): boolean {
-  return source === undefined || new RegExp(source).test(value)
-}
+const regexMatches = (source: string | undefined, value: string) =>
+  source === undefined || new RegExp(source).test(value)
 
 function findAllowance(
   allow: Allowance[],
@@ -94,11 +96,20 @@ function findAllowance(
   )
 }
 
+type Spec = { policy: FieldPolicy; order?: string[]; optional: boolean }
+const specOf = (spec: FieldSpec | undefined): Spec =>
+  spec === undefined
+    ? { policy: "must-match", optional: false }
+    : typeof spec === "string"
+      ? { policy: spec, optional: false }
+      : { policy: spec.policy, order: spec.order, optional: spec.optional }
+
 function diffRecords(
   expected: ResponseRecord,
   actual: ResponseRecord,
+  specFor: (field: string) => Spec,
   errorsMatchOnStatus: boolean,
-): { field: string; expected?: string | number; actual?: string | number }[] {
+): Omit<FieldDiff, "sample" | "allowed">[] {
   const status = expected["status"]
   // The same error on both sides is a match: how each platform labels an error page is not part of
   // what readers or crawlers depend on.
@@ -110,42 +121,23 @@ function diffRecords(
   ) {
     return []
   }
-  const fields = [...new Set([...Object.keys(expected), ...Object.keys(actual)])].sort()
-  return fields
-    .filter((field) => expected[field] !== actual[field])
-    .map((field) => ({ field, expected: expected[field], actual: actual[field] }))
-}
-
-function majorityCache(observations: Observation[]): CacheClass {
-  const known = observations.map((o) => o.cache).filter((c) => c !== "unknown")
-  if (known.length === 0) return "unknown"
-  const cached = known.filter((c) => c === "cached").length
-  return cached * 2 >= known.length ? "cached" : "uncached"
-}
-
-function applyCachePolicy(
-  policy: CachePolicy,
-  raw: State,
-  perf: State,
-): { state: State; note?: string } {
-  if (raw !== "fail") return { state: raw }
-  if (policy === "must-match") return { state: "fail" }
-  if (policy === "ignore") return { state: "pass", note: "cache policy is ignore" }
-  if (perf === "pass") {
-    return { state: "warn", note: "uncached where the reference caches, but fast enough" }
+  const out: Omit<FieldDiff, "sample" | "allowed">[] = []
+  for (const field of [...new Set([...Object.keys(expected), ...Object.keys(actual)])].sort()) {
+    const [e, a] = [expected[field], actual[field]]
+    if (e === a) continue
+    const spec = specFor(field)
+    if (spec.optional && (e === undefined || a === undefined)) continue
+    const rank = (v: unknown) => (spec.order ? spec.order.indexOf(String(v)) : -1)
+    const improved = spec.order !== undefined && rank(e) !== -1 && rank(a) > rank(e)
+    out.push({
+      field,
+      expected: e,
+      actual: a,
+      policy: spec.policy,
+      improved: improved || undefined,
+    })
   }
-  if (perf === "warn") {
-    return { state: "warn", note: "uncached where the reference caches, and possibly slower" }
-  }
-  return { state: "fail", note: "uncached where the reference caches, and slower" }
-}
-
-// What the timing samples of each direction are, for the label beside them.
-export function metricOf(direction: string | undefined, scenePrimary?: string): string {
-  if (direction === "load" || direction === "reload") return "lcp"
-  if (direction === "navigate") return "navigation"
-  if (direction === "scene") return scenePrimary ?? "durationMs"
-  return "ttfb"
+  return out
 }
 
 type PerfInput = {
@@ -155,6 +147,7 @@ type PerfInput = {
   previous: Map<number, number>
   refs: Observation[]
   locked: Expect | undefined
+  vantage: string
   target: string
   baseline: string
   ratcheted: (name: string) => boolean
@@ -164,8 +157,8 @@ type PerfInput = {
 
 // A comparison with timings from another batch only ever warns: between two batches the machine
 // and the network change by more than most regressions.
-function judgePerf(p: PerfInput): CaseVerdict["perf"] {
-  const perf: CaseVerdict["perf"] = { state: "unknown", actual: p.actual }
+function judgePerf(p: PerfInput, metric: string): CaseVerdict["perf"] {
+  const perf: CaseVerdict["perf"] = { state: "unknown", metric, actual: p.actual }
   if (!p.actual) return perf
   const actual = p.actual
 
@@ -174,7 +167,7 @@ function judgePerf(p: PerfInput): CaseVerdict["perf"] {
     const byTarget = new Map<string, number[]>()
     for (const o of p.peers) {
       if (b === undefined || b < 0 || o.batch !== b || !o.target) continue
-      byTarget.set(o.target, [...(byTarget.get(o.target) ?? []), ...warmTimings(o)])
+      byTarget.set(o.target, [...(byTarget.get(o.target) ?? []), ...o.primary])
     }
     return new Map(
       [...byTarget].flatMap(([name, t]) => {
@@ -183,8 +176,7 @@ function judgePerf(p: PerfInput): CaseVerdict["perf"] {
       }),
     )
   }
-  const inBatch = timingsIn(batch)
-  const paired = new Map([...inBatch].filter(([name]) => name !== p.target))
+  const paired = new Map([...timingsIn(batch)].filter(([name]) => name !== p.target))
   const earlier = timingsIn(p.previous.get(batch))
   // One batch that calls a route slower can be a slow minute on the network. Two in a row is a
   // regression.
@@ -200,23 +192,23 @@ function judgePerf(p: PerfInput): CaseVerdict["perf"] {
 
   // A ceiling set by hand is a person deciding what is fast enough for the route, so it settles
   // the timing verdict on every target and the comparisons above it are only shown.
+  const ceiling = p.explicitReference ? undefined : (p.locked?.max[p.vantage] ?? p.locked?.max["*"])
   const settle = (state: State) => {
-    const max = p.explicitReference ? undefined : p.locked?.ttfbMax
-    perf.max = max
-    if (max === undefined) {
+    perf.max = ceiling
+    if (ceiling === undefined) {
       perf.state = state
       return perf
     }
-    const over = actual.median > max
+    const over = actual.median > ceiling
     perf.state = over ? "fail" : "pass"
     perf.note = over
-      ? `median over the ${max}ms ceiling`
-      : `within the ${max}ms ceiling set by hand`
+      ? `median over the ${ceiling}ms ceiling`
+      : `within the ${ceiling}ms ceiling set by hand`
     return perf
   }
 
   if (p.explicitReference) {
-    const reference = summarise(p.refs.flatMap(warmTimings))
+    const reference = summarise(p.refs.flatMap((o) => o.primary))
     if (!reference) return perf
     const sameBatch = p.refs.some((o) => o.batch === batch)
     Object.assign(perf, {
@@ -263,12 +255,13 @@ function judgePerf(p: PerfInput): CaseVerdict["perf"] {
     }
   }
 
-  const fallback = p.locked?.ttfb ?? (p.locked ? undefined : summarise(p.refs.flatMap(warmTimings)))
+  const lockedTiming = p.locked?.timing[p.vantage]
+  const fallback =
+    lockedTiming ?? (p.locked ? undefined : summarise(p.refs.flatMap((o) => o.primary)))
   if (fallback) {
-    const against = p.locked?.ttfb ? "lock" : p.baseline
     Object.assign(perf, {
       baseline: fallback,
-      against,
+      against: lockedTiming ? "lock" : p.baseline,
       paired: false,
       call: p.call(fallback, actual),
     })
@@ -276,14 +269,16 @@ function judgePerf(p: PerfInput): CaseVerdict["perf"] {
       perf.note = "measured at another time; run the targets together to settle it"
     return settle(perf.call === "worse" ? "warn" : "pass")
   }
-  return p.locked?.ttfbMax !== undefined ? settle("pass") : perf
+  return ceiling !== undefined ? settle("pass") : perf
 }
 
 export type EvaluateInput = {
   config: Config
   lock: Lock
   target: string
+  vantage: string
   observations: Observation[]
+  probes?: Map<string, ProbeInfo>
   reference?: Observation[]
   useLock?: boolean
   // Every target's observations from the batches `observations` came from, the target's own
@@ -293,16 +288,8 @@ export type EvaluateInput = {
 }
 
 export function evaluate(input: EvaluateInput): Evaluation {
-  const {
-    config,
-    lock,
-    target,
-    observations,
-    reference = [],
-    useLock = true,
-    peers = [],
-    previous = new Map(),
-  } = input
+  const { config, lock, target, vantage, observations, reference = [], useLock = true } = input
+  const { peers = [], previous = new Map(), probes = new Map() } = input
   const call = (before: Summary, after: Summary) =>
     callChange(before, after, config.perf.threshold, config.perf.minDeltaMs)
   const group = (list: Observation[]) => {
@@ -320,91 +307,104 @@ export function evaluate(input: EvaluateInput): Evaluation {
   const routes = new Map<string, RouteVerdict>()
   for (const [pattern, route, caseId, def] of casesOf(lock)) {
     const key = caseKey(pattern, caseId)
+    const probeName = probeOf(config, def)
+    const probe = probes.get(probeName)
     const seen = (byCase.get(key) ?? []).filter((o) => route.samples.includes(o.sample))
-    const refs = (refByCase.get(key) ?? []).filter((o) => route.samples.includes(o.sample))
+    const hash = seen[0]?.probeHash
+    // Numbers only compare when the same definition produced them.
+    const refs = (refByCase.get(key) ?? []).filter(
+      (o) => route.samples.includes(o.sample) && o.probeHash === hash,
+    )
     const locked = useLock ? def.expect : undefined
+    const stale =
+      locked?.probe && hash && locked.probe.hash !== hash
+        ? `locked with ${locked.probe.name}@${locked.probe.hash}, measured with ${probeName}@${hash}`
+        : undefined
     const kind: CaseVerdict["reference"] = locked ? "lock" : refs.length > 0 ? "baseline" : "none"
+    const specFor = (field: string) =>
+      specOf(def.fields?.[field] ?? route.fields?.[field] ?? probe?.fields?.[field])
 
     const diffs: FieldDiff[] = []
     for (const o of seen) {
       if (o.error || !o.record) {
-        diffs.push({ sample: o.sample, field: "error", actual: o.error ?? "no response" })
+        diffs.push({
+          sample: o.sample,
+          field: "error",
+          actual: o.error ?? "no response",
+          policy: "must-match",
+        })
         continue
       }
       let expected: ResponseRecord | undefined
       if (locked)
         expected = { ...locked.record, ...(locked.status ? { status: locked.status } : {}) }
       else {
-        const ref = refs.find((r) => r.sample === o.sample) ?? undefined
+        const ref = refs.find((r) => r.sample === o.sample)
         expected = ref?.record ?? commonRecord(refs.flatMap((r) => (r.record ? [r.record] : [])))
       }
-      if (!expected) continue
-      for (const d of diffRecords(expected, o.record, config.probe.errorsMatchOnStatus)) {
-        const allowed = findAllowance(config.allow, target, o.path, d.field, d.expected, d.actual)
+      if (!expected || stale) continue
+      for (const d of diffRecords(expected, o.record, specFor, config.record.errorsMatchOnStatus)) {
+        const allowed = d.improved
+          ? undefined
+          : findAllowance(config.allow, target, o.path, d.field, d.expected, d.actual)
         if (allowed) usedAllowances.add(allowed.id)
         diffs.push({ sample: o.sample, ...d, allowed: allowed?.id })
       }
     }
-    const contractState: State =
-      seen.length === 0 || kind === "none"
-        ? diffs.some((d) => d.field === "error")
-          ? "fail"
-          : "unknown"
-        : diffs.some((d) => !d.allowed)
-          ? "fail"
-          : "pass"
 
-    const actualPerf = summarise(seen.flatMap(warmTimings))
-    const perf = judgePerf({
-      actual: actualPerf,
-      seen,
-      peers: peers.filter(
-        (o) => caseKey(o.route, o.caseId) === key && route.samples.includes(o.sample),
-      ),
-      previous,
-      refs,
-      locked,
-      target,
-      baseline: config.baseline,
-      ratcheted: (name) => config.targets[name]?.ratchet ?? false,
-      call,
-      explicitReference: !useLock,
-    })
-    perf.metric = metricOf(def.direction, def.scene ? config.scenes[def.scene]?.primary : undefined)
+    const perf = stale
+      ? { state: "unknown" as State, metric: probe?.primary ?? "primary", note: stale }
+      : judgePerf(
+          {
+            actual: summarise(seen.flatMap((o) => o.primary)),
+            seen,
+            peers: peers.filter(
+              (o) =>
+                caseKey(o.route, o.caseId) === key &&
+                route.samples.includes(o.sample) &&
+                o.probeHash === hash,
+            ),
+            previous,
+            refs,
+            locked,
+            vantage,
+            target,
+            baseline: config.baseline,
+            ratcheted: (name) => config.targets[name]?.ratchet ?? false,
+            call,
+            explicitReference: !useLock,
+          },
+          probe?.primary ?? "primary",
+        )
 
-    const actualCache = majorityCache(seen)
-    const expectedCache: CacheClass | undefined = locked
-      ? locked.cache
-      : refs.length > 0
-        ? majorityCache(refs)
-        : undefined
-    let rawCache: State = "unknown"
-    if (expectedCache && expectedCache !== "unknown" && actualCache !== "unknown") {
-      rawCache = expectedCache === "cached" && actualCache === "uncached" ? "fail" : "pass"
-    }
-    const policy = route.cachePolicy ?? config.defaults.cachePolicy
-    const cacheResult = applyCachePolicy(policy, rawCache, perf.state)
-    const signal = seen.find((o) => o.cache === actualCache)?.cacheSignal
+    const open = diffs.filter((d) => !d.allowed && !d.improved && d.policy !== "ignore")
+    const hard = open.filter((d) => d.policy !== "if-slower")
+    const soft = open.filter((d) => d.policy === "if-slower")
+    let contractState: State
+    let note: string | undefined
+    if (diffs.some((d) => d.field === "error")) contractState = "fail"
+    else if (seen.length === 0 || kind === "none" || stale) contractState = "unknown"
+    else if (hard.length > 0) contractState = "fail"
+    else if (soft.length > 0) {
+      // A field that only matters while the route is slow: a lost cache on a page that is still
+      // fast enough is a note, not a failure.
+      contractState = perf.state === "pass" ? "warn" : perf.state === "warn" ? "warn" : "fail"
+      note = `${soft.map((d) => d.field).join(", ")} changed; ${perf.state === "pass" ? "fast enough anyway" : "and not shown to be fast enough"}`
+    } else contractState = "pass"
 
     const verdict: CaseVerdict = {
       key,
       route: pattern,
       caseId,
+      probe: probeName,
+      vantage,
       reference: kind,
+      stale,
       observed: seen.length > 0,
-      state: "unknown",
-      contract: { state: contractState, diffs },
-      cache: {
-        state: cacheResult.state,
-        expected: expectedCache,
-        actual: actualCache,
-        signal,
-        note: cacheResult.note,
-      },
+      state: seen.length === 0 ? "unknown" : worst([contractState, perf.state]),
+      contract: { state: contractState, diffs, note },
       perf,
     }
-    verdict.state =
-      seen.length === 0 ? "unknown" : worst([contractState, cacheResult.state, perf.state])
 
     const entry = routes.get(pattern) ?? {
       route: pattern,
@@ -426,6 +426,7 @@ export function evaluate(input: EvaluateInput): Evaluation {
   const counts: Record<State, number> = { pass: 0, warn: 0, fail: 0, unknown: 0 }
   for (const r of list) counts[r.state]++
   return {
+    vantage,
     routes: list,
     counts,
     unusedAllowances: config.allow.map((a) => a.id).filter((id) => !usedAllowances.has(id)),

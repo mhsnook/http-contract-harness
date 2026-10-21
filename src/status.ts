@@ -1,77 +1,112 @@
 import type { Observation } from "./db.ts"
 import type { Project } from "./project.ts"
-import type { TargetEvaluation } from "./report.ts"
-import { evaluate } from "./verdict.ts"
+import { evaluate, type Evaluation, type ProbeInfo } from "./verdict.ts"
 
-export function statusOf(project: Project, targets?: string[], label?: string): TargetEvaluation[] {
-  const { config, lock, store } = project
-  const names = targets?.length ? targets : Object.keys(config.targets)
-  const reference = store.latestFor(config.baseline)
-  return names.map((target) => {
-    if (!config.targets[target]) throw new Error(`No target "${target}"`)
-    const observations = store.latestFor(target, label)
-    const batches = [...new Set(observations.flatMap((o) => (o.batch == null ? [] : [o.batch])))]
-    const previous = new Map(
-      batches.flatMap((b) => {
-        const p = store.previousBatch(target, b)
-        return p === undefined ? [] : [[b, p] as const]
-      }),
-    )
-    return {
-      target,
-      evaluation: evaluate({
-        config,
-        lock,
-        target,
-        observations,
-        reference: target === config.baseline ? [] : reference,
-        peers: store.inBatches([...batches, ...previous.values()]),
-        previous,
-      }),
-    }
-  })
+export type TargetEvaluation = { target: string; vantage: string; evaluation: Evaluation }
+
+export async function probeInfo(project: Project): Promise<Map<string, ProbeInfo>> {
+  const loaded = await project.probes()
+  return new Map(
+    [...loaded].map(([name, p]) => [name, { hash: p.hash, primary: p.primary, fields: p.fields }]),
+  )
 }
 
-// `#12` or `12` is a run; `port@isr-60` the latest of port's runs labelled isr-60; `port` a target.
+/** The vantages to report on: the ones asked for, else every one that has measured anything. */
+export function vantagesOf(project: Project, asked?: string[]): string[] {
+  if (asked?.length) return asked
+  const measured = project.store.vantagesMeasured()
+  const configured = Object.keys(project.config.vantages)
+  const both = configured.filter((v) => measured.includes(v))
+  return both.length ? both : configured.slice(0, 1)
+}
+
+export async function statusOf(
+  project: Project,
+  opts: { targets?: string[]; vantages?: string[]; label?: string } = {},
+): Promise<TargetEvaluation[]> {
+  const { config, lock, store } = project
+  const probes = await probeInfo(project)
+  const names = opts.targets?.length ? opts.targets : Object.keys(config.targets)
+  const out: TargetEvaluation[] = []
+  for (const vantage of vantagesOf(project, opts.vantages)) {
+    const reference = store.latestFor(config.baseline, vantage)
+    for (const target of names) {
+      if (!config.targets[target]) throw new Error(`No target "${target}"`)
+      const observations = store.latestFor(target, vantage, opts.label)
+      const batches = [...new Set(observations.flatMap((o) => (o.batch == null ? [] : [o.batch])))]
+      const previous = new Map(
+        batches.flatMap((b) => {
+          const p = store.previousBatch(target, vantage, b)
+          return p === undefined ? [] : [[b, p] as const]
+        }),
+      )
+      out.push({
+        target,
+        vantage,
+        evaluation: evaluate({
+          config,
+          lock,
+          target,
+          vantage,
+          observations,
+          probes,
+          reference: target === config.baseline ? [] : reference,
+          peers: store.inBatches([...batches, ...previous.values()]),
+          previous,
+        }),
+      })
+    }
+  }
+  return out
+}
+
+// `#12` or `12` is a run; `port@isr-60` the latest of port's runs labelled isr-60; `port` a
+// target. Either may end in `/vantage`.
 export function resolveRef(
   project: Project,
   ref: string,
-): { name: string; observations: Observation[] } {
+  defaultVantage: string,
+): { name: string; target: string; vantage: string; observations: Observation[] } {
   const id = /^#?(\d+)$/.exec(ref)?.[1]
   if (id) {
     const run = project.store.run(Number(id))
     if (!run) throw new Error(`No run ${id}`)
     return {
-      name: `${run.target}#${run.id}${run.label ? `@${run.label}` : ""}`,
+      name: `${run.target}#${run.id}${run.label ? `@${run.label}` : ""}/${run.vantage}`,
+      target: run.target,
+      vantage: run.vantage,
       observations: project.store.observationsOf(run.id),
     }
   }
-  const [target, label] = ref.split("@") as [string, string | undefined]
+  const [head, vantage = defaultVantage] = ref.split("/") as [string, string | undefined]
+  const [target, label] = head.split("@") as [string, string | undefined]
   if (!project.config.targets[target]) throw new Error(`"${ref}" is neither a run id nor a target`)
-  const observations = project.store.latestFor(target, label)
-  if (observations.length === 0)
-    throw new Error(
-      `No observations for ${ref} yet. Run \`portside run --target ${target}${label ? ` --label ${label}` : ""}\`.`,
-    )
-  return { name: ref, observations }
+  const observations = project.store.latestFor(target, vantage, label)
+  if (observations.length === 0) {
+    throw new Error(`No observations for ${ref} from ${vantage} yet.`)
+  }
+  return { name: `${head}/${vantage}`, target, vantage, observations }
 }
 
-export function compareRefs(
+export async function compareRefs(
   project: Project,
   before: string,
   after: string,
-): TargetEvaluation & { before: string } {
-  const a = resolveRef(project, before)
-  const b = resolveRef(project, after)
-  const target = b.name.split(/[#@]/)[0] as string
+): Promise<TargetEvaluation & { before: string }> {
+  const vantage = vantagesOf(project)[0] as string
+  const a = resolveRef(project, before, vantage)
+  const b = resolveRef(project, after, vantage)
   return {
     before: a.name,
     target: b.name,
+    vantage: b.vantage,
     evaluation: evaluate({
       config: project.config,
       lock: project.lock,
-      target,
+      target: b.target,
+      vantage: b.vantage,
       observations: b.observations,
+      probes: await probeInfo(project),
       reference: a.observations,
       useLock: false,
     }),
