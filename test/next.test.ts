@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
 import { nextRoutes } from "../src/discover/next.ts"
 
-const dir = mkdtempSync(join(tmpdir(), "portside-next-"))
+const dir = mkdtempSync(join(tmpdir(), "harness-next-"))
 const write = (file: string, value: unknown) => {
   mkdirSync(join(dir, file, ".."), { recursive: true })
   writeFileSync(join(dir, file), JSON.stringify(value))

@@ -58,11 +58,11 @@ export async function openBrowser(browser: EngineVantage["browser"]): Promise<Br
   try {
     playwright = await import("playwright-core")
   } catch {
-    throw new Error("A probe asked for a browser: install playwright-core next to portside")
+    throw new Error("A probe asked for a browser: install playwright-core next to the harness")
   }
   if (browser.cdp) return playwright.chromium.connectOverCDP(browser.cdp)
   return playwright.chromium.launch({
-    executablePath: browser.executablePath ?? process.env.PORTSIDE_CHROMIUM,
+    executablePath: browser.executablePath ?? process.env.HARNESS_CHROMIUM,
   })
 }
 

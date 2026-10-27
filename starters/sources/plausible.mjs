@@ -3,7 +3,7 @@
 // Written from Plausible's API documentation and not yet run against a real site: check the
 // response shape on your first run.
 //
-// Needs PLAUSIBLE_API_KEY in the environment, and in portside.config.json:
+// Needs PLAUSIBLE_API_KEY in the environment, and in harness.config.json:
 //   "survey": { "sources": { "plausible": { "site": "example.com", "host": "https://plausible.io" } } }
 
 async function query(ctx, body) {

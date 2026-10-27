@@ -4,7 +4,7 @@
 // field names, the plan's retention and the query's time limits all need checking on the first run.
 // An entry is counted as an HTML request whose Referer is another host or absent.
 //
-// Needs CLOUDFLARE_API_TOKEN (Analytics read) in the environment, and in portside.config.json:
+// Needs CLOUDFLARE_API_TOKEN (Analytics read) in the environment, and in harness.config.json:
 //   "survey": { "sources": { "cloudflare": { "zone": "<zone id>", "host": "www.example.com" } } }
 
 const QUERY = `query($zone: String!, $since: Time!, $until: Time!) {

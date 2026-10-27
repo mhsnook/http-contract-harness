@@ -120,10 +120,10 @@ function describeChanges(changes: Change[], verb: string): string {
   return lines.join("\n")
 }
 
-const HELP = `portside: the record and the method for porting a site route by route.
+const HELP = `http-contract-harness (hch): the record and the method for porting a site route by route.
 
 You, or your agent, write the probes (how a load, a navigation or a cold request is measured) and
-the sources (where traffic numbers come from). Portside keeps every measurement, judges them the
+the sources (where traffic numbers come from). The harness keeps every measurement, judges them the
 same way every time, and remembers what was tried.
 
 Set up
@@ -221,7 +221,7 @@ function init(argv: string[]) {
       `Wrote ${CONFIG_FILE}, ${LOCK_FILE}, ${probes.length} starter probes in ${PROBES_DIR}/ and ${sources.length} starter sources in ${SOURCES_DIR}/ (off until renamed without the _).`,
       "",
       "The probes and sources are yours: read them, change them, add more.",
-      "`portside plan` says what to do next, in order. `portside guide` explains the method.",
+      "`hch plan` says what to do next, in order. `hch guide` explains the method.",
     ].join("\n"),
   )
 }
@@ -229,7 +229,7 @@ function init(argv: string[]) {
 async function runner(argv: string[]) {
   const [sub, ...rest] = argv
   if (sub !== "serve")
-    throw new Error("Usage: portside runner serve --token T [--port 4900] [--region R]")
+    throw new Error("Usage: hch runner serve --token T [--port 4900] [--region R]")
   const { values } = parse(rest, {
     token: { type: "string" },
     port: { type: "string", default: "4900" },
@@ -238,8 +238,8 @@ async function runner(argv: string[]) {
     cdp: { type: "string" },
     "executable-path": { type: "string" },
   })
-  const token = (values.token as string | undefined) ?? process.env.PORTSIDE_RUNNER_TOKEN
-  if (!token) throw new Error("runner serve needs --token or PORTSIDE_RUNNER_TOKEN")
+  const token = (values.token as string | undefined) ?? process.env.HARNESS_RUNNER_TOKEN
+  if (!token) throw new Error("runner serve needs --token or HARNESS_RUNNER_TOKEN")
   const server = await serveRunner({
     port: Number(values.port),
     host: values.host as string,
@@ -251,7 +251,7 @@ async function runner(argv: string[]) {
     },
     cwd: process.cwd(),
   })
-  console.log(`portside runner on ${server.url}${values.region ? ` (${values.region})` : ""}`)
+  console.log(`hch runner on ${server.url}${values.region ? ` (${values.region})` : ""}`)
 }
 
 function caseFrom(values: Record<string, unknown>): CaseDef {
@@ -347,12 +347,12 @@ async function dispatch(project: Project, command: string, argv: string[]) {
                   `${pc.bold(r.name)}@${r.hash}  ${pc.dim(`primary ${r.primary}`)}  ${r.describe}`,
               )
               .join("\n") ||
-            `No probes in ${project.config.probes}/. \`portside probe new http --from http\` starts one.`,
+            `No probes in ${project.config.probes}/. \`hch probe new http --from http\` starts one.`,
         )
       }
       if (sub === "new") {
         if (!name)
-          throw new Error("Usage: portside probe new <name> [--from http|page|navigate|command]")
+          throw new Error("Usage: hch probe new <name> [--from http|page|navigate|command]")
         const from = (values.from as string | undefined) ?? "http"
         const source = join(STARTERS, "probes", `${from}.mjs`)
         if (!existsSync(source)) throw new Error(`No starter named ${from}`)
@@ -384,7 +384,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
               .join("\n"),
         )
       }
-      throw new Error("Usage: portside probe list|new|show")
+      throw new Error("Usage: hch probe list|new|show")
     }
 
     case "survey": {
@@ -421,9 +421,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
         if (report.uncovered.length) {
           lines.push(
             "",
-            pc.yellow(
-              "Traffic no route matches (`portside discover --traffic` adds routes for it):",
-            ),
+            pc.yellow("Traffic no route matches (`hch discover --traffic` adds routes for it):"),
           )
           for (const u of report.uncovered.slice(0, 10))
             lines.push(`  ${u.path}  ${u.views} views, ${u.entries} entries`)
@@ -487,7 +485,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
         if (report.unsampled.length)
           lines.push(
             pc.yellow(
-              `No sample for ${report.unsampled.length}: add one with \`portside route sample <pattern> <path>\``,
+              `No sample for ${report.unsampled.length}: add one with \`hch route sample <pattern> <path>\``,
             ),
             ...report.unsampled.map((p) => `  ${p}`),
           )
@@ -527,14 +525,13 @@ async function dispatch(project: Project, command: string, argv: string[]) {
                 : ""
               return `${p}  ${pc.dim(`w=${r.weight ?? project.config.defaults.weight}${traffic} samples=${r.samples.length} locked=${locked}/${cases.length} cases=${cases.join(",")}`)}`
             })
-            .join("\n") || "No routes yet. Run `portside discover` or `portside route add`.",
+            .join("\n") || "No routes yet. Run `hch discover` or `hch route add`.",
       )
     }
 
     case "route": {
       const [sub, pattern, ...more] = argv
-      if (!sub || !pattern)
-        throw new Error("Usage: portside route add|sample|weight|remove <pattern> …")
+      if (!sub || !pattern) throw new Error("Usage: hch route add|sample|weight|remove <pattern> …")
       const { values, positionals } = parse(more, {
         sample: { type: "string", multiple: true },
         weight: { type: "string" },
@@ -579,11 +576,10 @@ async function dispatch(project: Project, command: string, argv: string[]) {
     case "case": {
       const [sub, pattern, id, ...more] = argv
       if (sub !== "add" || !pattern || !id)
-        throw new Error("Usage: portside case add <route> <id> --probe P [--condition k=v]…")
+        throw new Error("Usage: hch case add <route> <id> --probe P [--condition k=v]…")
       const { values } = parse(more, CASE_OPTIONS)
       const route = project.lock.routes[pattern]
-      if (!route)
-        throw new Error(`${pattern} is not in the lock; add it with \`portside route add\``)
+      if (!route) throw new Error(`${pattern} is not in the lock; add it with \`hch route add\``)
       if (route.cases[id]) throw new Error(`${caseKey(pattern, id)} already exists`)
       const def = caseFrom(values)
       const probes = await project.probes()
@@ -657,7 +653,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
             ...Object.entries(result.missingHeaders).map(([t, m]) =>
               pc.yellow(`${t}: ${m.join(", ")} unset, so those headers were not sent`),
             ),
-            pc.dim("`portside status` shows how they did."),
+            pc.dim("`hch status` shows how they did."),
           ].join("\n"),
       )
     }
@@ -703,7 +699,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
 
     case "show": {
       const [ref, ...more] = argv
-      if (!ref) throw new Error("Usage: portside show <route|route#case>")
+      if (!ref) throw new Error("Usage: hch show <route|route#case>")
       const { values } = parse(more, { vantage: { type: "string", multiple: true } })
       const { pattern, caseId } = ref.includes("#")
         ? parseCaseKey(ref)
@@ -769,7 +765,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
 
     case "compare": {
       const [before, after, ...more] = argv
-      if (!before || !after) throw new Error("Usage: portside compare <before> <after>")
+      if (!before || !after) throw new Error("Usage: hch compare <before> <after>")
       const { values } = parse(more, {
         all: { type: "boolean", default: false },
         markdown: { type: "boolean", default: false },
@@ -825,7 +821,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
 
     case "loosen": {
       const [key, ...more] = argv
-      if (!key) throw new Error("Usage: portside loosen <route#case> --reason why …")
+      if (!key) throw new Error("Usage: hch loosen <route#case> --reason why …")
       const { values } = parse(more, {
         reason: { type: "string" },
         max: { type: "string" },
@@ -895,13 +891,13 @@ async function dispatch(project: Project, command: string, argv: string[]) {
                 ]
               : []),
             `Started ${pc.bold(experiment.id)}: measured the before batch of ${experiment.target}, against ${experiment.reference}, from ${experiment.vantages.join(", ")}.`,
-            `Make the one change, deploy it, then: portside experiment measure ${experiment.id}`,
+            `Make the one change, deploy it, then: hch experiment measure ${experiment.id}`,
           ].join("\n"),
         )
       }
       if (sub === "measure") {
         const id = positionals[0]
-        if (!id) throw new Error("Usage: portside experiment measure <id>")
+        if (!id) throw new Error("Usage: hch experiment measure <id>")
         const { experiment, warnings } = await measureExperiment(project, id, {
           note: values.note as string | undefined,
           repeats,
@@ -911,14 +907,14 @@ async function dispatch(project: Project, command: string, argv: string[]) {
           [
             describeExperiment(experiment, false),
             "",
-            `Then: portside experiment decide ${id} keep|discard --why "…"`,
+            `Then: hch experiment decide ${id} keep|discard --why "…"`,
           ].join("\n"),
         )
       }
       if (sub === "decide") {
         const [id, verdict] = positionals
         if (!id || (verdict !== "keep" && verdict !== "discard"))
-          throw new Error('Usage: portside experiment decide <id> keep|discard --why "…"')
+          throw new Error('Usage: hch experiment decide <id> keep|discard --why "…"')
         const experiment = decideExperiment(
           project,
           id,
@@ -940,11 +936,11 @@ async function dispatch(project: Project, command: string, argv: string[]) {
       }
       if (sub === "show") {
         const id = positionals[0]
-        if (!id) throw new Error("Usage: portside experiment show <id>")
+        if (!id) throw new Error("Usage: hch experiment show <id>")
         const experiment = getExperiment(project, id)
         return out(json, experiment, () => describeExperiment(experiment, false))
       }
-      throw new Error("Usage: portside experiment start|measure|decide|list|show")
+      throw new Error("Usage: hch experiment start|measure|decide|list|show")
     }
 
     case "note": {
@@ -1016,12 +1012,12 @@ async function dispatch(project: Project, command: string, argv: string[]) {
         port: Number(values.port),
         host: values.host as string,
       })
-      console.log(`portside dashboard on ${url}`)
+      console.log(`hch dashboard on ${url}`)
       return
     }
 
     default:
-      throw new Error(`Unknown command "${command}". \`portside help\` lists them.`)
+      throw new Error(`Unknown command "${command}". \`hch help\` lists them.`)
   }
 }
 

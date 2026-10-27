@@ -212,7 +212,7 @@ describe("a port, route by route", () => {
   })
 
   it("stops comparing a case once its probe changes, until it is measured and locked again", async () => {
-    const file = join(dir, "portside/probes/http.mjs")
+    const file = join(dir, "harness/probes/http.mjs")
     const original = readFileSync(file, "utf8")
     appendFileSync(file, "\n// counting changed\n")
     await runBatch(project, { targets: ["legacy", "port"], routes: (p) => p === "/old" })
@@ -283,7 +283,9 @@ describe("a port, route by route", () => {
   it("serves the dashboard and its state", async () => {
     const server = await serve(project, { port: 0, host: "127.0.0.1" })
     try {
-      expect(await (await fetch(server.url)).text()).toContain("<title>Portside</title>")
+      expect(await (await fetch(server.url)).text()).toContain(
+        "<title>HTTP Contract Harness</title>",
+      )
       const state = await (await fetch(`${server.url}/api/state`)).json()
       expect(state.status.map((s: { target: string }) => s.target)).toEqual(["legacy", "port"])
       expect(state.plan.phases).toHaveLength(6)

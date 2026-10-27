@@ -6,9 +6,9 @@
 //                 which is what a browser refresh sends to a page marked must-revalidate
 //   "cold"        the target's purge command before every request, then the request
 //
-// A purge command lives in the target's options in portside.config.json, for example
-//   "options": { "purge": "curl -s -X POST https://www.example.com/api/revalidate?path=$PORTSIDE_PATH" }
-// and runs with PORTSIDE_URL, PORTSIDE_PATH and PORTSIDE_TARGET set.
+// A purge command lives in the target's options in harness.config.json, for example
+//   "options": { "purge": "curl -s -X POST https://www.example.com/api/revalidate?path=$HARNESS_PATH" }
+// and runs with HARNESS_URL, HARNESS_PATH and HARNESS_TARGET set.
 //
 // Revisit for each stack: what counts as a cache hit (cacheHint knows the common CDN headers),
 // whether a query string reaches the cache key (on vinext 1.0 it does not, so a nonce is not a

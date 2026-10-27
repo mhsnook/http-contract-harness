@@ -168,7 +168,7 @@ export class Store {
   static open(root: string): Store {
     const dir = join(root, STATE_DIR)
     mkdirSync(dir, { recursive: true })
-    return new Store(join(dir, "portside.db"))
+    return new Store(join(dir, "harness.db"))
   }
 
   startRun(run: Omit<Run, "id" | "finishedAt">): number {

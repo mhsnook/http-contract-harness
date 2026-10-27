@@ -25,8 +25,8 @@ let project: Project
 let port: Knobs
 let runner: { url: string; close(): Promise<void> }
 
-const purge = `node -e "fetch(new URL('/__purge?path=' + encodeURIComponent(process.env.PORTSIDE_PATH), process.env.PORTSIDE_URL))"`
-const command = `node -e "require('fs').writeFileSync(process.env.PORTSIDE_METRICS, JSON.stringify({ items: process.env.PORTSIDE_TARGET === 'port' ? 2 : 1 }))"`
+const purge = `node -e "fetch(new URL('/__purge?path=' + encodeURIComponent(process.env.HARNESS_PATH), process.env.HARNESS_URL))"`
+const command = `node -e "require('fs').writeFileSync(process.env.HARNESS_METRICS, JSON.stringify({ items: process.env.HARNESS_TARGET === 'port' ? 2 : 1 }))"`
 
 const observed = (target: string, route: string, caseId: string, vantage = "local") =>
   project.store.latestFor(target, vantage).filter((o) => o.route === route && o.caseId === caseId)
@@ -51,11 +51,11 @@ beforeAll(async () => {
     },
     vantages: {
       local: { browser: { executablePath: CHROMIUM } },
-      eu: { url: runner.url, token: "${PORTSIDE_TEST_TOKEN}", region: "weur" },
+      eu: { url: runner.url, token: "${HARNESS_TEST_TOKEN}", region: "weur" },
     },
     run: { repeats: 4, concurrency: 2 },
   })
-  process.env.PORTSIDE_TEST_TOKEN = "secret"
+  process.env.HARNESS_TEST_TOKEN = "secret"
   project = openProject(dir)
   const route = (samples: string[], cases: Record<string, object> = {}) => ({
     samples,

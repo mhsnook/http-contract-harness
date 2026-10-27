@@ -203,7 +203,7 @@ describe("headers", () => {
 
 describe("URL lists", () => {
   const file = (text: string) => {
-    const dir = mkdtempSync(join(tmpdir(), "portside-urls-"))
+    const dir = mkdtempSync(join(tmpdir(), "harness-urls-"))
     writeFileSync(join(dir, "list"), text)
     return join(dir, "list")
   }
@@ -236,7 +236,7 @@ describe("probes", () => {
   })
 
   it("versions a probe by its own file and every local module it imports", () => {
-    const dir = mkdtempSync(join(tmpdir(), "portside-bundle-"))
+    const dir = mkdtempSync(join(tmpdir(), "harness-bundle-"))
     writeFileSync(join(dir, "_shared.mjs"), "export const x = 1\n")
     writeFileSync(
       join(dir, "a.mjs"),

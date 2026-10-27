@@ -29,7 +29,7 @@ const same = (a: string, b: string) =>
   a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 
 /**
- * Runs probes for a portside client somewhere else, such as a VM in the region a site's readers
+ * Runs probes for a harness client somewhere else, such as a VM in the region a site's readers
  * are in. It executes the probe code the client sends, so the token is the whole of its security:
  * run it behind HTTPS and give the token only to people who could run code on the machine anyway.
  */

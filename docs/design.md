@@ -1,6 +1,6 @@
 # Design
 
-Portside grew out of the HTTP contract suite, the cross-framework comparison and the timing
+The harness grew out of the HTTP contract suite, the cross-framework comparison and the timing
 recorder written for one Next.js → vinext port (findaprotest.info, moving from Vercel to Cloudflare
 Workers). This records what it kept from them, what it changed, and why.
 
@@ -28,14 +28,14 @@ The direction logic survives as starter probes, with what each one assumes writt
 
 ## What lives where
 
-| What                                            | Where                    | Committed | Written by           |
-| ----------------------------------------------- | ------------------------ | --------- | -------------------- |
-| Targets, vantages, regions, allowed differences | `portside.config.json`   | yes       | a person             |
-| Routes, samples, cases, expectations            | `portside.lock.json`     | yes       | the CLI and a person |
-| Experiments and findings                        | `portside.ledger.json`   | yes       | the CLI              |
-| How things are measured                         | `portside/probes/*.mjs`  | yes       | the agent            |
-| Where traffic numbers come from                 | `portside/sources/*.mjs` | yes       | the agent            |
-| Every measurement and every traffic import      | `.portside/portside.db`  | no        | `run`, `survey`      |
+| What                                            | Where                   | Committed | Written by           |
+| ----------------------------------------------- | ----------------------- | --------- | -------------------- |
+| Targets, vantages, regions, allowed differences | `harness.config.json`   | yes       | a person             |
+| Routes, samples, cases, expectations            | `harness.lock.json`     | yes       | the CLI and a person |
+| Experiments and findings                        | `harness.ledger.json`   | yes       | the CLI              |
+| How things are measured                         | `harness/probes/*.mjs`  | yes       | the agent            |
+| Where traffic numbers come from                 | `harness/sources/*.mjs` | yes       | the agent            |
+| Every measurement and every traffic import      | `.harness/harness.db`   | no        | `run`, `survey`      |
 
 The inventory is committed because a route that disappears is the failure a port most often
 causes and least often notices. The contract suite this came from kept its routes as a literal
@@ -80,7 +80,7 @@ code. Runners receive the whole bundle and check its hash before running it.
 
 The contract suite could not tell a cached route from an uncached one, because the edge gives every
 client the same `private, max-age=0, must-revalidate`. The manual check was to request a page whose
-React keys came from `uuidv4()` several times and compare hashes. Portside does that on every route:
+React keys came from `uuidv4()` several times and compare hashes. The harness does that on every route:
 
 1. A hit header (`cf-cache-status`, `x-vercel-cache`, `x-nextjs-cache`, `x-vinext-cache`,
    `x-cache`, `age`, …) on any request after the first is a hit. Every request after the first
@@ -146,7 +146,7 @@ wrong.
 - **Only the target's own requests decide when a page has settled.** On the first try the home
   page never settled, because third-party requests stayed open.
 - **A bypass secret stays on its origin.** Playwright's `extraHTTPHeaders` sends headers to every
-  origin a page touches, so portside adds them by intercepting the target's own requests only,
+  origin a page touches, so the harness adds them by intercepting the target's own requests only,
   which turns the browser cache off. Cookies are scoped by the browser and leave the cache alone.
 
 ## Experiments

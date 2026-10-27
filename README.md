@@ -1,9 +1,9 @@
-# portside
+# HTTP contract harness
 
 The record and the method for porting a website route by route.
 
 A port moves a site to a new framework, a new host, or both, and the question at every step is
-whether each route still does what it did, as fast as it did, for the readers who use it. Portside
+whether each route still does what it did, as fast as it did, for the readers who use it. The harness
 keeps the answer. It holds an inventory of the site's routes, every measurement ever taken of
 them, the contract the port is held to, the experiments tried and what was decided, and what was
 learned along the way. It judges every measurement the same way, and it says which phase of the
@@ -14,14 +14,14 @@ how a cache is purged, when a client-side navigation has finished: those depend 
 its stack, and the answers for Next.js on Vercel are not the answers for TanStack Start on
 Cloudflare. They live in **probes**, small modules in your repository that you or your agent write,
 read and change. Where traffic numbers come from lives in **sources**, written the same way.
-Portside starts you with working examples of both.
+The harness starts you with working examples of both.
 
 ## Install
 
-Portside needs Node 22.13 or later. It is not on npm yet; build it from this repository:
+The harness needs Node 22.13 or later. It is not on npm yet; build it from this repository:
 
 ```sh
-git clone <this repository> portside && cd portside
+git clone <this repository> http-contract-harness && cd http-contract-harness
 pnpm install && pnpm build
 pnpm link --global
 ```
@@ -32,31 +32,31 @@ Browser probes need `playwright-core` installed next to it, and a Chromium.
 
 ```sh
 cd your-site
-portside init --baseline-url https://www.example.com --candidate-url https://port.example.com
-portside plan
+hch init --baseline-url https://www.example.com --candidate-url https://port.example.com
+hch plan
 ```
 
-`init` writes `portside.config.json` and `portside.lock.json`, copies the starter probes into
-`portside/probes/` and the starter sources into `portside/sources/`, and ignores `.portside/`, where
+`init` writes `harness.config.json` and `harness.lock.json`, copies the starter probes into
+`harness/probes/` and the starter sources into `harness/sources/`, and ignores `.harness/`, where
 the measurements live. `plan` says what to do next. Commit everything else.
 
-To hand the port to an agent, tell it to run `portside guide` and follow it.
+To hand the port to an agent, tell it to run `hch guide` and follow it.
 
 ## The phases
 
-`portside plan` works out where the port stands from the database, the lock and the ledger, and
+`hch plan` works out where the port stands from the database, the lock and the ledger, and
 lists the checks of the current phase and the commands that move it on.
 
 1. **Survey.** Which routes readers view, which they land on from outside, and where they are.
-   `portside survey` runs the project's sources (or reads `--csv` exports), stores the rows, ranks
+   `hch survey` runs the project's sources (or reads `--csv` exports), stores the rows, ranks
    the routes by views and by entries, lists the traffic no route in the inventory covers, and
    works out the share of readers in each region. Route weights come from it, and the **priority
    routes** are the smallest set that holds 80% of the views and 80% of the entries.
 2. **Inventory.** Every route, with sample URLs and the cases that reach it differently: a cookie,
-   a header, a query string, a different probe. `portside discover` reads sitemaps, a Next.js build
+   a header, a query string, a different probe. `hch discover` reads sitemaps, a Next.js build
    (`--next .next`) and the surveyed traffic (`--traffic`).
 3. **Profile.** The current site measured on every priority route, from a vantage in every region
-   that holds a tenth of the readers, and locked in as the contract with `portside lock`.
+   that holds a tenth of the readers, and locked in as the contract with `hch lock`.
 4. **Parity.** The port brought to the lock on the priority routes.
 5. **Improve.** Experiments on the routes that are slower than they should be, each one recorded
    with its theory, its before and after, and the decision.
@@ -64,7 +64,7 @@ lists the checks of the current phase and the commands that move it on.
 
 ## Probes
 
-A probe is an ES module in `portside/probes/`. Portside calls it once per repeat, per target, and
+A probe is an ES module in `harness/probes/`. The harness calls it once per repeat, per target, and
 keeps what it returns.
 
 ```js
@@ -91,7 +91,7 @@ normaliser, cache-header and served-from helpers, and `state` that lasts across 
 batch. A sample can say `skip: "why"`, such as a purge that did not take, or `warmup: true`, such
 as the request that filled a cache; neither is timed.
 
-A probe's version is the hash of its file and every local module it imports. Portside never
+A probe's version is the hash of its file and every local module it imports. The harness never
 compares numbers measured by two versions: a lock taken with an older version reads as stale until
 the case is measured and locked again. Change how a probe counts, and the comparison starts over.
 
@@ -113,9 +113,9 @@ request, because on vinext a unique query string does not reach the cache key.
 A case is one way of reaching a route: a probe, and the conditions it is given.
 
 ```sh
-portside case add /event/:city/:id cold --probe http --condition cache=cold
-portside case add /event/:city/:id nav --probe navigate --condition from=/
-portside case add / es --cookie locale=es
+hch case add /event/:city/:id cold --probe http --condition cache=cold
+hch case add /event/:city/:id nav --probe navigate --condition from=/
+hch case add / es --cookie locale=es
 ```
 
 A probe's `record` is the contract: status, `Location`, headers, whatever it chooses to return.
@@ -127,18 +127,18 @@ Each field has a policy, from the probe, the route or the case:
 - `ignore`: shown, never judged.
 
 A field's `order` lists its values from worst to best, so `uncached → cached` is an improvement,
-which `portside ratchet` keeps.
+which `hch ratchet` keeps.
 
 ## Measuring
 
-`portside run` measures every case on every target in one **batch** per vantage, requesting the
+`hch run` measures every case on every target in one **batch** per vantage, requesting the
 targets in turn, so both share the machine and the network. Timings are compared within a batch:
 the middle halves of the two distributions have to separate, and the medians differ by 10% and
 25 ms, before anything is called slower. A target slower than the baseline fails only when the
 batch before agreed; the first time it is a warning. The baseline slower than another target is a
 warning too, the cue to carry the port's change back. Timings from another batch only ever warn.
 
-`portside lock` records the baseline's record and its timing per vantage. `ratchet` tightens what
+`hch lock` records the baseline's record and its timing per vantage. `ratchet` tightens what
 a target now beats and never loosens. `loosen` is the one way down, and keeps its reason.
 
 ## Vantages
@@ -146,7 +146,7 @@ a target now beats and never loosens. `loosen` is the one way down, and keeps it
 A vantage is where probes run. `local` is this machine. Any other machine can be one:
 
 ```sh
-portside runner serve --token "$TOKEN" --region weur        # on a VM in Frankfurt, say
+hch runner serve --token "$TOKEN" --region weur        # on a VM in Frankfurt, say
 ```
 
 ```json
@@ -167,7 +167,7 @@ Run session; every probe that asks for a browser then gets that one.
 
 ### Regions
 
-`portside survey --regions` writes the share of readers per region into the config, in coarse
+`hch survey --regions` writes the share of readers per region into the config, in coarse
 regions (`nam`, `sam`, `weur`, `eeur`, `me`, `afr`, `apac`, `oc`). The plan asks for a vantage in
 each region that holds a tenth of the readers, and launch readiness weighs each vantage's results
 by its region's share.
@@ -187,24 +187,24 @@ vantage outside both platforms.
 ## Experiments and findings
 
 ```sh
-portside experiment start "Cache the event page for 60s at the edge" --route /event
+hch experiment start "Cache the event page for 60s at the edge" --route /event
 # make the one change and deploy it
-portside experiment measure <id>
-portside experiment decide <id> keep --why "TTFB 140ms faster from every vantage; events stay fresh enough"
-portside note "vinext leaves the query string out of its page cache key" --route /event --tag cache
+hch experiment measure <id>
+hch experiment decide <id> keep --why "TTFB 140ms faster from every vantage; events stay fresh enough"
+hch note "vinext leaves the query string out of its page cache key" --route /event --tag cache
 ```
 
 `start` lists what was already tried on those routes, and the findings about them, then measures a
 before batch: the target and a reference, usually the baseline, from every vantage. `measure`
 takes an after batch and corrects each case's change by what the reference did in between.
 Keeping an experiment that broke the contract is refused. Experiments and findings live in
-`portside.ledger.json`, which is committed, so the next person or agent sees what was tried, what
+`harness.ledger.json`, which is committed, so the next person or agent sees what was tried, what
 was learned, and why.
 
 ## Commands
 
-`portside help` lists them all, and every command takes `--json`. `portside status --gate` exits 1
-when any route fails, for CI. `portside serve` opens a dashboard that follows the database, the
+`hch help` lists them all, and every command takes `--json`. `hch status --gate` exits 1
+when any route fails, for CI. `hch serve` opens a dashboard that follows the database, the
 lock and the ledger as they change, whoever changes them.
 
 ## Limits

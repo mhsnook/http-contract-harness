@@ -2,13 +2,13 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { z } from "zod"
 
-export const CONFIG_FILE = "portside.config.json"
-export const LOCK_FILE = "portside.lock.json"
-export const STATE_DIR = ".portside"
+export const CONFIG_FILE = "harness.config.json"
+export const LOCK_FILE = "harness.lock.json"
+export const STATE_DIR = ".harness"
 
-export const LEDGER_FILE = "portside.ledger.json"
-export const PROBES_DIR = "portside/probes"
-export const SOURCES_DIR = "portside/sources"
+export const LEDGER_FILE = "harness.ledger.json"
+export const PROBES_DIR = "harness/probes"
+export const SOURCES_DIR = "harness/sources"
 
 const headers = z.record(z.string(), z.string())
 
@@ -42,7 +42,7 @@ const target = z.object({
 export type Target = z.infer<typeof target>
 
 const vantage = z.object({
-  // A runner started with `portside runner serve`; without one the vantage is this machine.
+  // A runner started with `hch runner serve`; without one the vantage is this machine.
   url: z.string().url().optional(),
   token: z.string().optional(),
   region: z.string().optional(),
@@ -71,7 +71,7 @@ export const configSchema = z.object({
   baseline: z.string(),
   targets: z.record(z.string(), target),
   vantages: z.record(z.string(), vantage).default({ local: { browser: {} } }),
-  // The share of readers each region holds, from `portside survey` or by hand, such as
+  // The share of readers each region holds, from `hch survey` or by hand, such as
   // { "weur": 0.8, "enam": 0.15 }. Launch readiness weighs each route's result by it.
   regions: z.record(z.string(), z.number()).default({}),
   probes: z.string().default(PROBES_DIR),

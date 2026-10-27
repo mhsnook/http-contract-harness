@@ -93,7 +93,7 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
     lines.push(
       "",
       opts.all
-        ? "No routes in the lock yet: run `portside discover`."
+        ? "No routes in the lock yet: run `hch discover`."
         : pc.green("Every route passes on every target."),
     )
     return lines.join("\n")
@@ -130,7 +130,7 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
   if (!opts.all)
     lines.push(
       "",
-      pc.dim("Passing routes hidden; --all shows them. `portside show <route>` explains one."),
+      pc.dim("Passing routes hidden; --all shows them. `hch show <route>` explains one."),
     )
   for (const id of unusedEverywhere(evals)) {
     lines.push(

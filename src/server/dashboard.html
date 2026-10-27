@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Portside</title>
+    <title>HTTP Contract Harness</title>
     <style>
       :root {
         --bg: #fbfbfa;
@@ -331,7 +331,7 @@
   <body>
     <header>
       <div>
-        <h1>Portside</h1>
+        <h1>HTTP Contract Harness</h1>
         <div class="sub" id="root"></div>
       </div>
       <div class="toolbar">
@@ -504,7 +504,7 @@
         if (list.length === 0) {
           const none = state.status[0]?.evaluation.routes.length === 0
           $("rows").innerHTML =
-            `<tr><td class="empty" colspan="${3 + state.status.length}">${none ? "No routes in the lock yet. Run <code>portside discover</code>." : "Nothing needs attention with this filter."}</td></tr>`
+            `<tr><td class="empty" colspan="${3 + state.status.length}">${none ? "No routes in the lock yet. Run <code>hch discover</code>." : "Nothing needs attention with this filter."}</td></tr>`
           return
         }
         $("rows").innerHTML = list
@@ -671,15 +671,15 @@
         }
       })
       $("filter").addEventListener("input", () => {
-        store("portside:filter", $("filter").value)
+        store("harness:filter", $("filter").value)
         renderTable()
       })
       $("state").addEventListener("change", () => {
-        store("portside:state", $("state").value)
+        store("harness:state", $("state").value)
         renderTable()
       })
-      $("filter").value = load("portside:filter") ?? ""
-      $("state").value = load("portside:state") ?? "attention"
+      $("filter").value = load("harness:filter") ?? ""
+      $("state").value = load("harness:state") ?? "attention"
 
       const stream = new EventSource("/api/stream")
       stream.addEventListener("change", refresh)

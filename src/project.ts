@@ -27,7 +27,7 @@ export type Project = {
 export function openProject(cwd = process.cwd()): Project {
   const root = findRoot(cwd)
   if (!root) {
-    throw new Error("No portside.config.json here or in any parent. Run `portside init` first.")
+    throw new Error("No harness.config.json here or in any parent. Run `hch init` first.")
   }
   const project: Project = {
     root,

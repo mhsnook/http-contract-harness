@@ -3,8 +3,8 @@
 // conditions.command: the command (required)
 // conditions.metric: the number it reports that the verdict reads; durationMs when absent
 //
-// The command runs with PORTSIDE_BASE_URL, PORTSIDE_URL, PORTSIDE_PATH, PORTSIDE_TARGET and
-// PORTSIDE_VANTAGE set, and may write a JSON object of numbers to the file PORTSIDE_METRICS names.
+// The command runs with HARNESS_BASE_URL, HARNESS_URL, HARNESS_PATH, HARNESS_TARGET and
+// HARNESS_VANTAGE set, and may write a JSON object of numbers to the file HARNESS_METRICS names.
 // A command that exits non-zero fails the case.
 //
 // To read a different metric per case, copy this file under another name and change `primary`:
@@ -23,11 +23,11 @@ export default {
   async measure(ctx) {
     const command = ctx.conditions.command
     if (!command) throw new Error("command needs conditions.command")
-    const dir = mkdtempSync(join(tmpdir(), "portside-command-"))
+    const dir = mkdtempSync(join(tmpdir(), "harness-command-"))
     const file = join(dir, "metrics.json")
     try {
       const started = performance.now()
-      await ctx.exec(String(command), { PORTSIDE_METRICS: file })
+      await ctx.exec(String(command), { HARNESS_METRICS: file })
       const durationMs = performance.now() - started
       let reported = {}
       try {

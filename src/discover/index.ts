@@ -17,7 +17,7 @@ export type DiscoverOptions = {
   target?: string
   next?: string
   urls?: string
-  // Paths from the traffic `portside survey` imported, so the routes readers use are covered.
+  // Paths from the traffic `hch survey` imported, so the routes readers use are covered.
   traffic?: boolean
   reweight?: boolean
   /** Re-derive every route nobody has touched: not added by hand, nothing locked, no extra cases. */

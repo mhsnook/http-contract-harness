@@ -171,7 +171,7 @@ export async function startExperiment(project: Project, opts: StartOptions) {
 
 function find(ledger: Ledger, id: string): Experiment {
   const found = ledger.experiments.find((e) => e.id === id)
-  if (!found) throw new Error(`No experiment ${id}. \`portside experiment list\` shows them.`)
+  if (!found) throw new Error(`No experiment ${id}. \`hch experiment list\` shows them.`)
   return found
 }
 

@@ -1,10 +1,11 @@
 {
-  "name": "@scenetest/portside",
+  "name": "http-contract-harness",
   "version": "0.1.0",
   "description": "Port a site route by route: record what every route does today, lock it in, ratchet it up, and track the port against it.",
   "type": "module",
   "bin": {
-    "portside": "./dist/cli.js"
+    "http-contract-harness": "./dist/cli.js",
+    "hch": "./dist/cli.js"
   },
   "exports": {
     ".": "./dist/index.js"

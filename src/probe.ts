@@ -155,7 +155,7 @@ export async function loadProbes(dir: string): Promise<Map<string, LoadedProbe>>
 /** A probe sent by a client to a runner, written out and checked against the hash it came with. */
 export async function probeFromBundle(name: string, bundle: ProbeBundle, hash: string) {
   if (hashBundle(bundle) !== hash) throw new Error(`probe ${name} does not match its hash`)
-  const dir = join(tmpdir(), "portside-probes", hash)
+  const dir = join(tmpdir(), "harness-probes", hash)
   for (const [rel, source] of Object.entries(bundle.files)) {
     const file = join(dir, rel)
     mkdirSync(dirname(file), { recursive: true })
@@ -245,11 +245,11 @@ export function contextFor(input: ContextInput, repeat: number): ProbeContext {
         cwd: input.cwd,
         env: {
           ...process.env,
-          PORTSIDE_BASE_URL: target.url,
-          PORTSIDE_URL: new URL(input.path, target.url).href,
-          PORTSIDE_PATH: input.path,
-          PORTSIDE_TARGET: target.name,
-          PORTSIDE_VANTAGE: input.vantage.name,
+          HARNESS_BASE_URL: target.url,
+          HARNESS_URL: new URL(input.path, target.url).href,
+          HARNESS_PATH: input.path,
+          HARNESS_TARGET: target.name,
+          HARNESS_VANTAGE: input.vantage.name,
           ...env,
         },
       })

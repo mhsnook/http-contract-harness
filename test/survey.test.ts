@@ -30,9 +30,9 @@ beforeAll(() => {
     targets: { legacy: { url: "http://127.0.0.1:9" }, port: { url: "http://127.0.0.1:9" } },
     survey: { sources: { fake: { site: "example.com" } } },
   })
-  mkdirSync(join(dir, "portside/sources"), { recursive: true })
-  writeFileSync(join(dir, "portside/sources/fake.mjs"), SOURCE)
-  writeFileSync(join(dir, "portside/sources/_off.mjs"), "throw new Error('never loaded')")
+  mkdirSync(join(dir, "harness/sources"), { recursive: true })
+  writeFileSync(join(dir, "harness/sources/fake.mjs"), SOURCE)
+  writeFileSync(join(dir, "harness/sources/_off.mjs"), "throw new Error('never loaded')")
   project = openProject(dir)
   const route = (samples: string[]) => ({
     samples,

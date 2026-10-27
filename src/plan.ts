@@ -124,8 +124,8 @@ export async function planOf(project: Project): Promise<Plan> {
     done: surveyChecks.every((c) => c.ok),
     checks: surveyChecks,
     next: [
-      "write or enable a source in portside/sources/ (rename a _starter), or export analytics to CSV",
-      "portside survey [--csv top-pages.csv] --regions",
+      "write or enable a source in harness/sources/ (rename a _starter), or export analytics to CSV",
+      "hch survey [--csv top-pages.csv] --regions",
     ],
   })
 
@@ -151,8 +151,8 @@ export async function planOf(project: Project): Promise<Plan> {
     done: inventoryChecks.every((c) => c.ok),
     checks: inventoryChecks,
     next: [
-      "portside discover [--sitemap] [--next .next] [--traffic]",
-      "portside route add <pattern> --sample <path>; portside case add <route> <id> --probe <probe> --condition k=v",
+      "hch discover [--sitemap] [--next .next] [--traffic]",
+      "hch route add <pattern> --sample <path>; hch case add <route> <id> --probe <probe> --condition k=v",
     ],
   })
 
@@ -198,9 +198,9 @@ export async function planOf(project: Project): Promise<Plan> {
     done: profileChecks.slice(0, 3).every((c) => c.ok),
     checks: profileChecks,
     next: [
-      "portside run --target " + config.baseline,
-      "portside lock --from " + config.baseline,
-      'portside note "<what you learned about how this stack caches, renders or counts>" --route <route>',
+      "hch run --target " + config.baseline,
+      "hch lock --from " + config.baseline,
+      'hch note "<what you learned about how this stack caches, renders or counts>" --route <route>',
     ],
   })
 
@@ -230,7 +230,7 @@ export async function planOf(project: Project): Promise<Plan> {
           : "every priority route passes or warns",
       },
     ],
-    next: ["portside run", "portside status", "portside show <route>"],
+    next: ["hch run", "hch status", "hch show <route>"],
   })
 
   const open = ledger.experiments.filter((x) => !x.decision)
@@ -262,9 +262,9 @@ export async function planOf(project: Project): Promise<Plan> {
       },
     ],
     next: [
-      'portside experiment start "<theory>" --route <route>',
-      "portside experiment measure <id>",
-      'portside experiment decide <id> keep|discard --why "…"',
+      'hch experiment start "<theory>" --route <route>',
+      "hch experiment measure <id>",
+      'hch experiment decide <id> keep|discard --why "…"',
     ],
   })
 
@@ -277,7 +277,7 @@ export async function planOf(project: Project): Promise<Plan> {
       ok: s >= 1,
       text: `${t}: ${Math.round(s * 100)}% of priority traffic, weighted by region, passes`,
     })),
-    next: ["portside status --gate"],
+    next: ["hch status --gate"],
   })
 
   // A phase is done only once every phase before it is: with no routes yet, "every priority route
