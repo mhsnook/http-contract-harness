@@ -1,7 +1,17 @@
 import { readFileSync, statSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { join } from "node:path"
-import { caseKey, CONFIG_FILE, LEDGER_FILE, LOCK_FILE, readConfig, readLock } from "../config.ts"
+import {
+  caseKey,
+  CONFIG_FILE,
+  LEDGER_FILE,
+  LOCK_FILE,
+  readConfig,
+  readLock,
+  referenceOf,
+  tracksOf,
+} from "../config.ts"
+import { promptsOf, REGION_NAMES } from "../prompt.ts"
 import { casesOf, type Project } from "../project.ts"
 import { lock, loosen, ratchet } from "../ratchet.ts"
 import { readLedger } from "../ledger.ts"
@@ -105,33 +115,40 @@ export async function serve(project: Project, opts: { port: number; host: string
     }
   }
 
-  const state = async () => ({
-    plan: await planOf(project),
-    ledger: readLedger(project.root),
-    vantages: Object.entries(project.config.vantages).map(([name, v]) => ({
-      name,
-      region: v.region ?? null,
-      remote: Boolean(v.url),
-    })),
-    project: {
-      root: project.root,
-      baseline: project.config.baseline,
-      targets: Object.entries(project.config.targets).map(([name, t]) => ({
+  const state = async () => {
+    const status = await statusOf(project)
+    return {
+      plan: await planOf(project),
+      ledger: readLedger(project.root),
+      vantages: Object.entries(project.config.vantages).map(([name, v]) => ({
         name,
-        url: t.url,
-        ratchet: t.ratchet,
+        region: v.region ?? null,
+        regionName: v.region ? (REGION_NAMES[v.region] ?? v.region) : null,
+        remote: Boolean(v.url),
       })),
-    },
-    status: await statusOf(project),
-    history: Object.fromEntries(
-      [...casesOf(project.lock)].map(([pattern, , id, def]) => [
-        caseKey(pattern, id),
-        def.history.filter((h) => h.by !== "lock").slice(-3),
-      ]),
-    ),
-    runs: project.store.latestRuns(),
-    running,
-  })
+      project: {
+        root: project.root,
+        baseline: project.config.baseline,
+        targets: Object.entries(project.config.targets).map(([name, t]) => ({
+          name,
+          url: t.url,
+          ratchet: t.ratchet,
+          reference: referenceOf(project.config, name),
+        })),
+        tracks: tracksOf(project.config),
+      },
+      status,
+      prompts: promptsOf(project.config, status),
+      history: Object.fromEntries(
+        [...casesOf(project.lock)].map(([pattern, , id, def]) => [
+          caseKey(pattern, id),
+          def.history.filter((h) => h.by !== "lock").slice(-3),
+        ]),
+      ),
+      runs: project.store.latestRuns(),
+      running,
+    }
+  }
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost")

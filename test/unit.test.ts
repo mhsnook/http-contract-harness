@@ -3,7 +3,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { classify } from "../src/cache.ts"
-import { expandHeaders } from "../src/config.ts"
+import { expandHeaders, type Config } from "../src/config.ts"
+import { promptFor } from "../src/prompt.ts"
 import { readUrlList } from "../src/discover/urls.ts"
 import { bundleOf, hashBundle, servedFrom } from "../src/probe.ts"
 import {
@@ -246,5 +247,82 @@ describe("probes", () => {
     expect(Object.keys(before.files).sort()).toEqual(["_shared.mjs", "a.mjs"])
     writeFileSync(join(dir, "_shared.mjs"), "export const x = 2\n")
     expect(hashBundle(bundleOf(dir, "a.mjs"))).not.toBe(hashBundle(before))
+  })
+})
+
+describe("prompts", () => {
+  const config = {
+    baseline: "current",
+    targets: {
+      current: { url: "https://www.example.com" },
+      port: { url: "https://port.example.com" },
+    },
+    tracks: [],
+    vantages: { nam: { region: "nam", browser: {} } },
+  } as unknown as Config
+  const base = {
+    key: "/old-events#default",
+    route: "/old-events",
+    caseId: "default",
+    probe: "http",
+    vantage: "nam",
+    reference: "lock",
+    observed: true,
+  } as const
+
+  it("say what differs and how to check a fix, and never to loosen the bar", () => {
+    const text = promptFor(config, "port", {
+      ...base,
+      state: "fail",
+      contract: {
+        state: "fail",
+        diffs: [
+          {
+            sample: "/old-events",
+            field: "status",
+            expected: 301,
+            actual: 308,
+            policy: "must-match",
+          },
+        ],
+      },
+      perf: { state: "pass", metric: "ttfb" },
+    })!
+    expect(text).toContain("/old-events#default fails on port (https://port.example.com)")
+    expect(text).toContain("from the nam vantage (North America)")
+    expect(text).toContain("status: expected 301, got 308 on /old-events")
+    expect(text).toContain("the lock taken from current")
+    expect(text).toContain("hch run --target current --target port")
+    expect(text).toContain("Do not loosen the lock")
+  })
+
+  it("ask the current site to carry a faster port's change back", () => {
+    const text = promptFor(config, "current", {
+      ...base,
+      state: "warn",
+      contract: { state: "pass", diffs: [] },
+      perf: {
+        state: "warn",
+        metric: "ttfb",
+        actual: { median: 70, p75: 72, n: 10, p25: 68, min: 66, max: 75 },
+        baseline: { median: 35, p75: 36, n: 10, p25: 34, min: 33, max: 38 },
+        against: "port",
+        call: "worse",
+        note: "port is faster here: carry it back?",
+      },
+    })!
+    expect(text).toContain("port has a median ttfb of 35ms, against 70ms on current")
+    expect(text).toContain("propose the same change to the current site")
+  })
+
+  it("have nothing to say about a passing case", () => {
+    expect(
+      promptFor(config, "port", {
+        ...base,
+        state: "pass",
+        contract: { state: "pass", diffs: [] },
+        perf: { state: "pass", metric: "ttfb" },
+      }),
+    ).toBeUndefined()
   })
 })

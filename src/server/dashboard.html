@@ -268,6 +268,46 @@
       .detail td {
         background: var(--bg);
       }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 10px;
+      }
+      .comparison {
+        margin-bottom: 12px;
+      }
+      .comparison > .sub {
+        margin-bottom: 4px;
+      }
+      .pair {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        max-width: 1100px;
+      }
+      @media (max-width: 640px) {
+        .pair {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+      /* Revealed on hover, and always shown on screens that cannot hover. */
+      .copy {
+        font-size: 11.5px;
+        padding: 1px 8px;
+        margin-left: 6px;
+        opacity: 0;
+        transition: opacity 0.12s;
+      }
+      tr.route > td:hover .copy,
+      .card:hover .copy,
+      .copy:focus-visible {
+        opacity: 1;
+      }
+      @media (hover: none) {
+        .copy {
+          opacity: 1;
+        }
+      }
       /* Kept to the visible width, since the table can scroll wider than the page. */
       .detail-body {
         position: sticky;
@@ -280,11 +320,6 @@
       .case h3 {
         font-size: 13px;
         margin: 0 0 6px;
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 10px;
       }
       .kv {
         display: grid;
@@ -432,6 +467,17 @@
 
       const many = () => new Set(state.status.map((s) => s.vantage)).size > 1
       const col = (s) => (many() ? `${s.target}/${s.vantage}` : s.target)
+      const from = (s) => {
+        const v = state.vantages.find((x) => x.name === s.vantage)
+        return `from ${s.vantage}${v?.regionName ? " · " + v.regionName : ""}`
+      }
+      const colHtml = (s) =>
+        `${esc(s.target)}${many() ? `<div class="sub" style="font-weight:400">${esc(from(s))}</div>` : ""}`
+      const promptKey = (s, c) => `${s.target}/${s.vantage} ${c.key}`
+      const copyButton = (s, c) =>
+        c && state.prompts?.[promptKey(s, c)]
+          ? `<button class="copy" data-copy="${esc(promptKey(s, c))}" title="Copy a prompt that asks an agent to fix this">Copy prompt</button>`
+          : ""
 
       function renderPlan() {
         const p = state.plan
@@ -508,7 +554,7 @@
 
       function renderTable() {
         $("head").innerHTML =
-          `<tr><th>Route</th><th style="text-align:right">Weight</th><th>Declared</th>${state.status.map((s) => `<th>${esc(col(s))}</th>`).join("")}</tr>`
+          `<tr><th>Route</th><th style="text-align:right">Weight</th><th>Declared</th>${state.status.map((s) => `<th>${colHtml(s)}</th>`).join("")}</tr>`
         const list = rows()
         if (list.length === 0) {
           const none = state.status[0]?.evaluation.routes.length === 0
@@ -522,14 +568,14 @@
               ? `${route.declared.mode}${route.declared.revalidate ? " " + route.declared.revalidate + "s" : ""}`
               : ""
             const tds = cells
-              .map((r) => {
+              .map((r, i) => {
                 if (!r) return "<td>–</td>"
                 const c = worstCase(r)
                 const p75 = Math.max(0, ...r.cases.map((x) => x.perf.actual?.p75 ?? 0)) || null
                 const tag =
                   r.cases.length > 1 && c && c.state !== "pass" ? "#" + c.caseId + " " : ""
                 const why = r.samples === 0 ? "no sample" : tag + reason(c)
-                return `<td><div class="cell"><span><span class="pill ${r.state}">${GLYPH[r.state]} ${r.state}</span> <span class="mono sub">${ms(p75)}</span></span><span class="why" title="${esc(why)}">${esc(why)}</span></div></td>`
+                return `<td><div class="cell"><span><span class="pill ${r.state}">${GLYPH[r.state]} ${r.state}</span> <span class="mono sub">${ms(p75)}</span>${copyButton(state.status[i], c)}</span><span class="why" title="${esc(why)}">${esc(why)}</span></div></td>`
               })
               .join("")
             const row = `<tr class="route" data-route="${esc(route.route)}"><td class="mono">${esc(route.route)}</td><td class="num">${route.weight}</td><td class="sub">${esc(declared)}</td>${tds}</tr>`
@@ -548,50 +594,78 @@
             ),
           ),
         ]
-        const body = caseIds
-          .map((id) => {
-            const per = state.status.map((s) => [
-              col(s),
-              s.evaluation.routes
-                .find((r) => r.route === pattern)
-                ?.cases.find((c) => c.caseId === id),
-            ])
-            const key = per.find(([, c]) => c)?.[1]?.key
-            const history = (state.history?.[key] ?? [])
-              .map(
-                (h) =>
-                  `<div>${esc(h.at.slice(0, 10))} · ${esc(h.by)} ${esc(h.field)}: ${esc(h.from ?? "–")} → ${esc(h.to ?? "–")}${h.reason ? ` · ${esc(h.reason)}` : ""}</div>`,
-              )
-              .join("")
-            return `<div class="case"><h3 class="mono">#${esc(id)} <button data-lock-case="${esc(key)}" style="font-size:12px;padding:2px 8px">Re-lock from baseline…</button></h3>${history ? `<div class="history" style="margin:0 0 8px">${history}</div>` : ""}<div class="grid">${per
-              .map(([target, c]) => {
-                if (!c) return ""
-                const kind = (d) =>
-                  d.allowed
-                    ? ["unknown", "allowed: " + d.allowed]
-                    : d.improved
-                      ? ["pass", "better"]
-                      : d.policy === "ignore"
-                        ? ["unknown", "ignored"]
-                        : d.policy === "if-slower"
-                          ? ["warn", "matters only if slower"]
-                          : ["fail", ""]
-                const diffs = c.contract.diffs
-                  .map((d) => {
-                    const [cls, why] = kind(d)
-                    return `<div class="${cls}"><code>${esc(d.field)}</code> ${esc(d.expected ?? "∅")} → ${esc(d.actual ?? "∅")}${why ? " (" + esc(why) + ")" : ""} <span class="sub">${esc(d.sample)}</span></div>`
-                  })
-                  .join("")
-                const a = c.perf.actual
-                return `<div class="card"><h2><span>${esc(target)}</span><span class="pill ${c.state}">${GLYPH[c.state]} ${c.state}</span></h2>
+        const RANK = { pass: 0, unknown: 1, warn: 2, fail: 3 }
+        const verdictOf = (s, id) =>
+          s?.evaluation.routes.find((r) => r.route === pattern)?.cases.find((c) => c.caseId === id)
+        const statusFor = (target, vantage) =>
+          state.status.find((s) => s.target === target && s.vantage === vantage)
+        // One row per comparison: the current site on the left, its port on the right.
+        const comparisons = []
+        const paired = new Set()
+        for (const track of state.project.tracks) {
+          for (const v of state.vantages) {
+            const left = statusFor(track.baseline, v.name)
+            const right = statusFor(track.port, v.name)
+            if (!left && !right) continue
+            for (const s of [left, right]) if (s) paired.add(s)
+            comparisons.push({
+              title: `${track.name}, ${from(left ?? right)}`,
+              cells: [left, right],
+            })
+          }
+        }
+        for (const s of state.status)
+          if (!paired.has(s)) comparisons.push({ title: from(s), cells: [s] })
+
+        const card = (s, c) => {
+          if (!s) return "<div></div>"
+          if (!c) return `<div class="card sub">${esc(s.target)}: no such case</div>`
+          const kind = (d) =>
+            d.allowed
+              ? ["unknown", "allowed: " + d.allowed]
+              : d.improved
+                ? ["pass", "better"]
+                : d.policy === "ignore"
+                  ? ["unknown", "ignored"]
+                  : d.policy === "if-slower"
+                    ? ["warn", "matters only if slower"]
+                    : ["fail", ""]
+          const diffs = c.contract.diffs
+            .map((d) => {
+              const [cls, why] = kind(d)
+              return `<div class="${cls}"><code>${esc(d.field)}</code> ${esc(d.expected ?? "∅")} → ${esc(d.actual ?? "∅")}${why ? " (" + esc(why) + ")" : ""} <span class="sub">${esc(d.sample)}</span></div>`
+            })
+            .join("")
+          const a = c.perf.actual
+          return `<div class="card"><h2><span>${esc(s.target)}</span><span>${copyButton(s, c)} <span class="pill ${c.state}">${GLYPH[c.state]} ${c.state}</span></span></h2>
         <div class="sub">${esc(c.probe)}, against ${esc(c.reference)}${c.stale ? " · " + esc(c.stale) : ""}</div>
         <dl class="kv" style="margin-top:8px">
           <dt>contract</dt><dd class="${c.contract.state}">${c.contract.state}${diffs ? "" : c.stale ? " · not compared: the lock is stale" : c.observed ? " · every field matches" : ""}${c.contract.note ? `<div class="sub">${esc(c.contract.note)}</div>` : ""}</dd>
           ${diffs ? `<dt></dt><dd>${diffs}</dd>` : ""}
           <dt>${esc(c.perf.metric)}</dt><dd class="${c.perf.state}">${a ? `median ${ms(a.median)} · p75 ${ms(a.p75)} · n=${a.n}` : "–"}<div class="sub">${c.perf.baseline ? `${esc(c.perf.against ?? "reference")}${c.perf.paired ? " (same batch)" : c.perf.paired === false ? " (another run)" : ""}: median ${ms(c.perf.baseline.median)} · p75 ${ms(c.perf.baseline.p75)} · ${c.perf.call}` : ""}${c.perf.max != null ? ` · max median ${ms(c.perf.max)}` : ""}${c.perf.note ? `<br>${esc(c.perf.note)}` : ""}</div></dd>
         </dl></div>`
-              })
-              .join("")}</div></div>`
+        }
+
+        const body = caseIds
+          .map((id) => {
+            const key = state.status.map((s) => verdictOf(s, id)).find(Boolean)?.key
+            const history = (state.history?.[key] ?? [])
+              .map(
+                (h) =>
+                  `<div>${esc(h.at.slice(0, 10))} · ${esc(h.by)} ${esc(h.field)}: ${esc(h.from ?? "–")} → ${esc(h.to ?? "–")}${h.reason ? ` · ${esc(h.reason)}` : ""}</div>`,
+              )
+              .join("")
+            const worst = (row) =>
+              Math.max(...row.cells.map((s) => RANK[verdictOf(s, id)?.state ?? "unknown"]))
+            const rows = comparisons
+              .filter((row) => row.cells.some((s) => verdictOf(s, id)))
+              .sort((a, b) => worst(a) - worst(b))
+              .map(
+                (row) =>
+                  `<div class="comparison"><div class="sub">${esc(row.title)}</div><div class="pair">${row.cells.map((s) => card(s, verdictOf(s, id))).join("")}</div></div>`,
+              )
+              .join("")
+            return `<div class="case"><h3 class="mono">#${esc(id)} <button data-lock-case="${esc(key)}" style="font-size:12px;padding:2px 8px">Re-lock from baseline…</button></h3>${history ? `<div class="history" style="margin:0 0 8px">${history}</div>` : ""}${rows}</div>`
           })
           .join("")
         return `<tr class="detail"><td colspan="${3 + state.status.length}"><div class="detail-body">${body}</div></td></tr>`
@@ -641,11 +715,30 @@
         $("problem").style.display = message ? "block" : "none"
       }
 
+      async function copy(button, text) {
+        try {
+          await navigator.clipboard.writeText(text)
+        } catch {
+          const area = document.createElement("textarea")
+          area.value = text
+          document.body.append(area)
+          area.select()
+          document.execCommand("copy")
+          area.remove()
+        }
+        button.textContent = "Copied"
+        setTimeout(() => (button.textContent = "Copy prompt"), 1500)
+      }
+
       document.addEventListener("click", async (event) => {
         const el = event.target.closest(
-          "[data-run],[data-lock],[data-lock-case],tr.route,#run-all,#ratchet",
+          "[data-copy],[data-run],[data-lock],[data-lock-case],tr.route,#run-all,#ratchet",
         )
         if (!el) return
+        if (el.dataset.copy) {
+          event.stopPropagation()
+          return copy(el, state.prompts[el.dataset.copy])
+        }
         const label = $("label").value.trim()
         if (el.id === "run-all") return post("/api/run", { label })
         if (el.id === "ratchet") {

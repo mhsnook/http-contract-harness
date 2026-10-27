@@ -43,7 +43,9 @@ phase; `--dir` keeps the project somewhere you choose.
 ## A port, stage by stage
 
 These are the dashboard (`hch serve`) at seven points in `hch demo`. Each shows the plan, with its
-phase strip, above every route on every target, from two vantages. The sites are simulated and both
+phase strip, above every route on every target. A column is a target measured from a vantage:
+`current` from `nam` is the current site in production, measured from a runner standing in for
+North America. The sites are simulated and both
 vantages run on one machine, so the numbers show how the method works, not how any host performs.
 
 **1. Inventory.** The survey has weighted the routes by traffic, and nothing has been measured yet.
@@ -69,9 +71,11 @@ next.
 
 **5. Production parity, failing.** Deployed, the port has lost the edge cache on event pages and
 serves city pages from a slower data cache. Two batches in a row agree, so both fail rather than
-warn.
+warn. The city page is open: one row per comparison, the current site on the left and the port on
+the right, passing rows first. A failing card's Copy prompt button copies a prompt that asks an
+agent to fix it.
 
-![Event and city pages red on the deployed port, from both vantages](docs/screenshots/5-production-failing.png)
+![The city page opened, the dev comparison passing and both production comparisons failing](docs/screenshots/5-production-failing.png)
 
 **6. An experiment.** Caching the event page at the edge, measured before and after, is kept with
 its reason. The event page turns green, and the port now beats the lock on a cold request.
@@ -289,7 +293,9 @@ was learned, and why.
 
 ## Commands
 
-`hch help` lists them all, and every command takes `--json`. `hch status --gate` exits 1
+`hch help` lists them all, and every command takes `--json`. `hch prompt` prints, for each case
+that fails or warns, a prompt to hand an agent: what differs, what it is held to, and how to check a
+fix. The dashboard's Copy prompt buttons copy the same text. `hch status --gate` exits 1
 when any route fails, for CI. `hch serve` opens a dashboard that follows the database, the
 lock and the ledger as they change, whoever changes them.
 

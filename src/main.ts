@@ -46,6 +46,7 @@ import { runBatch } from "./run.ts"
 import { serveRunner } from "./runner.ts"
 import { serve } from "./server/server.ts"
 import { compareRefs, statusOf } from "./status.ts"
+import { promptsOf } from "./prompt.ts"
 import { reweigh, survey } from "./survey.ts"
 
 type Options = NonNullable<ParseArgsConfig["options"]>
@@ -141,6 +142,7 @@ Measure
   run [--target T]… [--vantage V]… [--label L] [--route P]… [--repeats N] [--note text]
   runs
   status [--target T]… [--vantage V]… [--all] [--markdown] [--gate]
+  prompt [route|route#case] [--target T]… [--vantage V]…   a prompt to fix each failing case
   show <route|route#case>
   compare <before> <after>                           12, port, port@label, port/vantage
 
@@ -754,6 +756,29 @@ async function dispatch(project: Project, command: string, argv: string[]) {
         )
       if (values.gate && evals.some((e) => e.evaluation.counts.fail > 0)) process.exitCode = 1
       return
+    }
+
+    case "prompt": {
+      const positional = argv[0] && !argv[0].startsWith("--") ? argv[0] : undefined
+      const { values } = parse(positional ? argv.slice(1) : argv, {
+        target: { type: "string", multiple: true },
+        vantage: { type: "string", multiple: true },
+      })
+      const evals = await statusOf(project, {
+        targets: list(values.target),
+        vantages: list(values.vantage),
+      })
+      const prompts = Object.entries(promptsOf(project.config, evals)).filter(
+        ([key]) =>
+          !positional ||
+          key.endsWith(` ${positional}`) ||
+          key.split(" ")[1]?.startsWith(`${positional}#`),
+      )
+      return out(values.json as boolean, Object.fromEntries(prompts), () =>
+        prompts.length
+          ? prompts.map(([key, text]) => `${pc.bold(key)}\n${text}`).join("\n\n")
+          : pc.green("Nothing fails or warns here."),
+      )
     }
 
     case "show": {

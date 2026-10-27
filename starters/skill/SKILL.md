@@ -30,8 +30,9 @@ It names the current phase, its checks, and the next commands. Work the phases i
    you learned about the stack.
 4. **parity:dev**, then **parity:production**: bring the port up to the current site, in dev mode
    first, then deployed. `hch run`, `hch status --json`, `hch show "<route>" --json`. Heaviest
-   failing priority routes first. A timing failure needs two batches in a row; one warning that
-   says "run again to confirm" calls for another run, not a change.
+   failing priority routes first. `hch prompt "<route>" --target <port>` says what differs and how
+   to check a fix. A timing failure needs two batches in a row; one warning that says "run again to
+   confirm" calls for another run, not a change.
 5. **improve**: one theory at a time.
    1. `hch experiment list --route <route> --json` and `hch notes --route <route> --json`. Do not
       repeat a discarded idea unless something it depended on has changed.
