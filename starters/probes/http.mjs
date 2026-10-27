@@ -8,7 +8,8 @@
 //
 // A purge command lives in the target's options in harness.config.json, for example
 //   "options": { "purge": "curl -s -X POST https://www.example.com/api/revalidate?path=$HARNESS_PATH" }
-// and runs with HARNESS_URL, HARNESS_PATH and HARNESS_TARGET set.
+// and runs with HARNESS_URL, HARNESS_PATH and HARNESS_TARGET set. `"purge": false` says the
+// target keeps no cache to clear, as a dev server that renders every request.
 //
 // Revisit for each stack: what counts as a cache hit (cacheHint knows the common CDN headers),
 // whether a query string reaches the cache key (on vinext 1.0 it does not, so a nonce is not a
@@ -35,6 +36,7 @@ export default {
     }
     if (mode === "cold") {
       const purge = ctx.conditions.purge ?? ctx.target.options.purge
+      if (purge === false) return
       if (!purge) throw new Error(`target ${ctx.target.name} has no options.purge command`)
       await ctx.exec(String(purge))
     }

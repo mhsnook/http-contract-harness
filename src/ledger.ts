@@ -77,8 +77,8 @@ const slug = (text: string) =>
   text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
     .slice(0, 40)
+    .replace(/^-|-$/g, "")
 
 function uniqueId(taken: string[], text: string) {
   const base = `${new Date().toISOString().slice(0, 10)}-${slug(text)}`

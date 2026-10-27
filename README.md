@@ -21,26 +21,47 @@ The harness starts you with working examples of both.
 The harness needs Node 22.13 or later. It is not on npm yet; build it from this repository:
 
 ```sh
-git clone <this repository> http-contract-harness && cd http-contract-harness
+git clone https://github.com/mhsnook/http-contract-harness && cd http-contract-harness
 pnpm install && pnpm build
 pnpm link --global
 ```
 
 Browser probes need `playwright-core` installed next to it, and a Chromium.
 
+## Try it
+
+```sh
+hch demo
+```
+
+The demo starts four small simulated sites on this machine: a current site in production and in
+dev mode, and its port in dev mode and deployed. It walks through every phase below with the real
+CLI, deploys two fixes along the way by flipping switches on the simulated port, and leaves the
+dashboard and the sites running so you can carry on by hand. `--until profile` stops after a
+phase; `--dir` keeps the project somewhere you choose.
+
 ## Start
 
 ```sh
 cd your-site
-hch init --baseline-url https://www.example.com --candidate-url https://port.example.com
+hch init --current https://www.example.com --port https://port.example.com \
+  --current-dev http://localhost:3000 --port-dev http://localhost:3001
 hch plan
 ```
 
 `init` writes `harness.config.json` and `harness.lock.json`, copies the starter probes into
-`harness/probes/` and the starter sources into `harness/sources/`, and ignores `.harness/`, where
-the measurements live. `plan` says what to do next. Commit everything else.
+`harness/probes/` and the starter sources into `harness/sources/`, installs the agent skill into
+`.claude/skills/http-contract-harness/`, and ignores `.harness/`, where the measurements live.
+`plan` says what to do next. Commit everything else.
 
-To hand the port to an agent, tell it to run `hch guide` and follow it.
+Leave out the two dev URLs to compare production alone. `--no-skill` skips the skill.
+
+### With an agent
+
+The skill tells a coding agent such as Claude Code when the harness applies, to start every
+session with `hch plan --json`, how to work each phase, and which commands need a person's
+agreement first. Every command takes `--json`, so the agent reads results rather than scraping
+them. An agent without skills can run `hch guide`, which prints the same method at length.
 
 ## The phases
 
@@ -55,12 +76,32 @@ lists the checks of the current phase and the commands that move it on.
 2. **Inventory.** Every route, with sample URLs and the cases that reach it differently: a cookie,
    a header, a query string, a different probe. `hch discover` reads sitemaps, a Next.js build
    (`--next .next`) and the surveyed traffic (`--traffic`).
-3. **Profile.** The current site measured on every priority route, from a vantage in every region
-   that holds a tenth of the readers, and locked in as the contract with `hch lock`.
-4. **Parity.** The port brought to the lock on the priority routes.
+3. **Profile.** The current site measured on every priority route, on every track (usually dev
+   mode and production), from a vantage in every region that holds a tenth of the readers. The
+   production numbers are locked in as the contract with `hch lock`.
+4. **Parity, one phase per track.** The port brought up to the current site on the priority
+   routes: in dev mode first, against the current site's dev server, then deployed, against
+   production and the lock.
 5. **Improve.** Experiments on the routes that are slower than they should be, each one recorded
    with its theory, its before and after, and the decision.
 6. **Launch.** Readiness is the share of priority traffic, weighted by region, whose routes pass.
+
+### Tracks
+
+A track pairs a target of the current site with the matching target of the port:
+
+```json
+"tracks": [
+  { "name": "dev", "baseline": "current-dev", "port": "port-dev" },
+  { "name": "production", "baseline": "current", "port": "port" }
+]
+```
+
+Each port is judged against its own track's baseline, measured in the same batch. Only the track
+whose baseline is the config's `baseline` is held to the lock, since dev servers render every
+request and their numbers are not a contract. A target with `"options": { "purge": false }` keeps
+no cache, so a cold case runs on it without a purge. A target listing `vantages` is measured only
+from those, as a dev server on a laptop is reachable only from `local`.
 
 ## Probes
 

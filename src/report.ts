@@ -24,6 +24,7 @@ export function reasonOf(c: CaseVerdict): string {
   if (error) return `error: ${show(error.actual)}`
   if (c.stale) return "stale lock: the probe changed"
   if (c.reference === "none") return "unlocked"
+  if (c.reference === "self" && c.state === "pass") return "reference"
   const contract = c.contract.diffs.filter(
     (d) => !d.allowed && !d.improved && d.policy !== "ignore",
   )
@@ -35,6 +36,8 @@ export function reasonOf(c: CaseVerdict): string {
   if (c.perf.state === "fail" || c.perf.state === "warn") {
     if (c.perf.call !== "worse")
       return `median ${ms(c.perf.actual?.median)} > max ${ms(c.perf.max)}`
+    if (c.perf.note?.includes("carry it back"))
+      return `${c.perf.against} is faster: ${ms(c.perf.baseline?.median)}, carry back?`
     const than = c.perf.against ? ` than ${c.perf.against}` : ""
     const when = c.perf.paired === false ? " (another run)" : ""
     return `slower${than}: ${ms(c.perf.baseline?.median)} → ${ms(c.perf.actual?.median)}${when}`
@@ -100,7 +103,14 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
   }
 
   const routeWidth = Math.min(48, Math.max(5, ...rows.map((r) => r.route.route.length)))
-  const cellWidth = 34
+  const cellWidth = Math.min(
+    60,
+    Math.max(
+      18,
+      ...evals.map((e) => label(e, many).length),
+      ...rows.flatMap((r) => r.cells.map((c) => cell(c).plain.length)),
+    ),
+  )
   lines.push("")
   lines.push(
     pc.dim(
@@ -143,8 +153,10 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
 }
 
 export function unusedEverywhere(evals: TargetEvaluation[]): string[] {
-  const [first, ...rest] = evals.map((e) => e.evaluation.unusedAllowances)
-  return (first ?? []).filter((id) => rest.every((list) => list.includes(id)))
+  const used = new Set(evals.flatMap((e) => e.evaluation.usedAllowances))
+  return [...new Set(evals.flatMap((e) => e.evaluation.unusedAllowances))].filter(
+    (id) => !used.has(id),
+  )
 }
 
 export function describeCase(target: string, c: CaseVerdict): string[] {

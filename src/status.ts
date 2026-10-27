@@ -114,6 +114,7 @@ export async function compareRefs(
       probes: await probeInfo(project),
       reference: a.observations,
       useLock: false,
+      compare: true,
     }),
   }
 }

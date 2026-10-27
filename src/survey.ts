@@ -236,3 +236,16 @@ export function summariseTraffic(
   }
   return report
 }
+
+/** Spreads the imported traffic over the routes again, after the routes change. */
+export function reweigh(project: Project) {
+  const rows = project.store.traffic()
+  if (!rows.length) return
+  summariseTraffic(project, rows, {
+    sources: [],
+    totals: { views: 0, entries: 0 },
+    routes: [],
+    uncovered: [],
+    regions: {},
+  })
+}

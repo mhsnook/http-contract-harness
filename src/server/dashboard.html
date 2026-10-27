@@ -400,11 +400,14 @@
         if (error) return "error: " + error.actual
         if (c.stale) return "stale lock: the probe changed"
         if (c.reference === "none") return "unlocked"
+        if (c.reference === "self" && c.state === "pass") return "reference"
         const d = c.contract.diffs.find((d) => !d.allowed && !d.improved && d.policy !== "ignore")
         if (c.contract.state === "fail" && d)
           return d.field === "error"
             ? "error: " + d.actual
             : `${d.field}: ${d.expected ?? "∅"} → ${d.actual ?? "∅"}`
+        if (c.perf.note?.includes("carry it back"))
+          return `${c.perf.against} is faster: ${ms(c.perf.baseline?.median)}, carry back?`
         if (c.perf.state === "fail" || c.perf.state === "warn")
           return c.perf.call !== "worse"
             ? `median ${ms(c.perf.actual?.median)} > max ${ms(c.perf.max)}`
@@ -443,7 +446,7 @@
           `<h2><span>${esc(phase.title)}</span><span class="sub">readiness ${Math.round(p.readiness.score * 100)}%</span></h2>
           <div style="margin:6px 0 10px">${strip}</div>
           <div class="grid">
-            <div>${phase.checks.map((c) => `<div class="${c.ok ? "pass" : "fail"}">${c.ok ? "✓" : "✗"} ${esc(c.text)}</div>`).join("")}
+            <div>${phase.checks.map((c) => `<div class="${c.ok ? "pass" : c.note ? "warn" : "fail"}">${c.ok ? "✓" : c.note ? "!" : "✗"} ${esc(c.text)}</div>`).join("")}
               ${phase.next.map((n) => `<div class="sub mono">next: ${esc(n)}</div>`).join("")}</div>
             <div><div class="sub">Experiments</div>${open.map((e) => `<div class="warn">${esc(e.id)}: ${esc(e.theory)}</div>`).join("")}
               ${decided.map((e) => `<div class="${e.decision.verdict === "keep" ? "pass" : "unknown"}">${esc(e.decision.verdict)} · ${esc(e.theory)}<div class="sub">${esc(e.decision.why)}</div></div>`).join("") || (open.length ? "" : '<div class="sub">none yet</div>')}</div>

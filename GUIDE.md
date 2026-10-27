@@ -49,19 +49,26 @@ Find out which routes matter and where readers are, before measuring anything.
   - when a page counts as loaded: LCP, a selector, the load event
   - when a client-side navigation has finished, and which request carries the new page
   - which response fields belong in the contract
-- `hch run --target <baseline> --json`, from every vantage the plan asks for.
-- `hch lock --from <baseline>`.
+- `hch run --target <baseline> --json` for the current site's target on every track (the profile
+  phase's `next` names them), from every vantage the plan asks for.
+- `hch lock --from <baseline>`. Only production is locked; a dev track compares its two dev
+  servers batch by batch.
 - Record what you learned about the stack: `hch note "<finding>" --route <route> --tag <tag>`.
   Write the finding so the next agent can act on it without repeating your work.
 
 ## 4. Parity
 
-- `hch run --json`, then `hch status --json`. Work on the heaviest failing priority
+There is one parity phase per track, in the order the config lists them, usually `parity:dev`
+then `parity:production`. Dev parity is the cheaper loop: fix it there, then deploy and confirm.
+
+- `hch run --target <track baseline> --target <track port> --json`, then `hch status --json`. Work on the heaviest failing priority
   routes first. `hch show "<route>" --json` explains one: `contract.diffs` (field, expected,
   actual, policy), `perf` (metric, actual, baseline, against, paired, call, note), and `stale` when
   the lock was taken with another version of the probe.
 - A timing failure needs two batches in a row. A single warning that says "run again to confirm"
   calls for one more run, not a change.
+- A warning on the current site that says "carry it back?" means the port is faster on that
+  route. Tell a person; the change may be worth making on the current site too.
 
 ## 5. Improve
 

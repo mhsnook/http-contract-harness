@@ -25,6 +25,7 @@ import {
   type CaseDef,
   type FieldSpec,
 } from "./config.ts"
+import { runDemo, STEPS, type Step } from "./demo/index.ts"
 import { discover } from "./discover/index.ts"
 import {
   addFinding,
@@ -45,7 +46,7 @@ import { runBatch } from "./run.ts"
 import { serveRunner } from "./runner.ts"
 import { serve } from "./server/server.ts"
 import { compareRefs, statusOf } from "./status.ts"
-import { survey } from "./survey.ts"
+import { reweigh, survey } from "./survey.ts"
 
 type Options = NonNullable<ParseArgsConfig["options"]>
 
@@ -159,6 +160,8 @@ Follow along
   serve [--port 4800]                                the dashboard, live
   runner serve --token T [--port 4900] [--region R] [--cdp URL] [--executable-path P]
   guide                                              how an agent should drive all of this
+  demo [--until survey|inventory|profile|dev|production|experiment] [--browser CHROMIUM]
+                                                     four simulated sites, every phase, a live dashboard
 
 Every command takes --json.`
 
@@ -169,6 +172,7 @@ async function main(argv: string[]) {
   if (command === "init") return init(rest)
   if (command === "guide") return console.log(readFileSync(join(PACKAGE_ROOT, "GUIDE.md"), "utf8"))
   if (command === "runner") return runner(rest)
+  if (command === "demo") return demo(rest)
   const project = openProject()
   try {
     await dispatch(project, command, rest)
@@ -208,11 +212,13 @@ function init(argv: string[]) {
     targets["current-dev"] = {
       url: values["current-dev"],
       vantages: ["local"],
+      options: { purge: false },
       note: "the current site in dev mode",
     }
     targets["port-dev"] = {
       url: values["port-dev"],
       vantages: ["local"],
+      options: { purge: false },
       note: "the port in dev mode",
     }
   }
@@ -250,6 +256,25 @@ function init(argv: string[]) {
       .filter((l, i) => l || i > 1)
       .join("\n"),
   )
+}
+
+async function demo(argv: string[]) {
+  const { values } = parse(argv, {
+    dir: { type: "string" },
+    until: { type: "string" },
+    port: { type: "string", default: "4800" },
+    browser: { type: "string" },
+    repeats: { type: "string" },
+  })
+  const until = values.until as Step | undefined
+  if (until && !STEPS.includes(until)) throw new Error(`--until takes one of ${STEPS.join(", ")}`)
+  await runDemo({
+    dir: values.dir as string | undefined,
+    until,
+    port: Number(values.port),
+    browser: values.browser as string | undefined,
+    repeats: values.repeats ? Number(values.repeats) : undefined,
+  })
 }
 
 async function runner(argv: string[]) {
@@ -439,6 +464,12 @@ async function dispatch(project: Project, command: string, argv: string[]) {
           s.error ? pc.red(`${s.name}: ${s.error}`) : `${s.name}: ${s.rows} rows`,
         )
         lines.push("", pc.bold("Most viewed and most entered routes"))
+        if (!report.routes.length)
+          lines.push(
+            pc.dim(
+              "  No routes yet. `hch discover` or `hch route add` spreads this traffic over them.",
+            ),
+          )
         for (const r of report.routes.slice(0, 20)) {
           lines.push(
             `  ${r.route.padEnd(40)} ${pct(r.share).padStart(6)} of views  ${pct(r.entryShare).padStart(6)} of entries`,
@@ -495,6 +526,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
         rebuild: values.rebuild as boolean,
         dryRun: values["dry-run"] as boolean,
       })
+      if (!values["dry-run"]) reweigh(project)
       return out(values.json as boolean, report, () => {
         const lines = [`Read ${report.sources.length ? report.sources.join(", ") : "nothing"}.`]
         lines.push(
@@ -592,6 +624,7 @@ async function dispatch(project: Project, command: string, argv: string[]) {
         else throw new Error(`Unknown: route ${sub}`)
       }
       project.saveLock()
+      if (sub === "add" || sub === "remove") reweigh(project)
       return out(
         values.json as boolean,
         routes[pattern] ?? null,
@@ -1018,7 +1051,9 @@ async function dispatch(project: Project, command: string, argv: string[]) {
           )
           if (here || !p.done)
             for (const c of p.checks)
-              lines.push(`    ${c.ok ? pc.green("✓") : pc.red("✗")} ${c.text}`)
+              lines.push(
+                `    ${c.ok ? pc.green("✓") : c.note ? pc.yellow("!") : pc.red("✗")} ${c.text}`,
+              )
           if (here) for (const n of p.next) lines.push(pc.dim(`    next: ${n}`))
         }
         lines.push(

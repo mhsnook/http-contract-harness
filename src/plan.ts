@@ -4,7 +4,8 @@ import { casesOf, type Project } from "./project.ts"
 import { statusOf, type TargetEvaluation } from "./status.ts"
 import { summariseTraffic } from "./survey.ts"
 
-export type Check = { ok: boolean; text: string }
+// A `note` is advice for a person and never holds a phase open.
+export type Check = { ok: boolean; text: string; note?: boolean }
 export type Phase = {
   // survey, inventory, profile, parity:<track> for each track in order, improve, launch
   id: string
@@ -210,7 +211,10 @@ export async function planOf(project: Project): Promise<Plan> {
 
   for (const track of tracks) {
     const fails: string[] = []
-    const measured = evals.filter((x) => x.target === track.port)
+    const measured = evals.filter(
+      (x) =>
+        x.target === track.port && x.evaluation.routes.some((r) => r.cases.some((c) => c.observed)),
+    )
     for (const e of measured) {
       for (const pattern of priority) {
         const r = e.evaluation.routes.find((x) => x.route === pattern)
@@ -230,10 +234,12 @@ export async function planOf(project: Project): Promise<Plan> {
             : `${track.port} not measured yet`,
         },
         {
-          ok: fails.length === 0,
+          ok: measured.length > 0 && fails.length === 0,
           text: fails.length
             ? `${fails.length} priority routes failing or unmeasured: ${fails.slice(0, 8).join(", ")}`
-            : `every priority route passes or warns against ${track.baseline}`,
+            : measured.length
+              ? `every priority route passes or warns against ${track.baseline}`
+              : `priority routes not compared with ${track.baseline} yet`,
         },
       ],
       next: [
@@ -245,11 +251,27 @@ export async function planOf(project: Project): Promise<Plan> {
   }
 
   const open = ledger.experiments.filter((x) => !x.decision)
-  const warns = evals.flatMap((e) =>
-    e.evaluation.routes
-      .filter((r) => priority.includes(r.route) && r.state === "warn")
-      .map((r) => `${r.route} on ${e.target}/${e.vantage}`),
-  )
+  const ports = new Set(tracks.map((t) => t.port))
+  const warns = evals
+    .filter((e) => ports.has(e.target))
+    .flatMap((e) =>
+      e.evaluation.routes
+        .filter((r) => priority.includes(r.route) && r.state === "warn")
+        .map((r) => `${r.route} on ${e.target}/${e.vantage}`),
+    )
+  const carryBack = [
+    ...new Set(
+      evals
+        .filter((e) => !ports.has(e.target))
+        .flatMap((e) =>
+          e.evaluation.routes.flatMap((r) =>
+            r.cases
+              .filter((c) => c.perf.note?.includes("carry it back"))
+              .map((c) => `${c.key} to ${e.target} from ${c.perf.against}`),
+          ),
+        ),
+    ),
+  ]
   phase({
     id: "improve",
     title: "Experiment on the routes that are slower than they should be",
@@ -265,8 +287,17 @@ export async function planOf(project: Project): Promise<Plan> {
         ok: warns.length === 0,
         text: warns.length
           ? `warnings on priority routes: ${warns.slice(0, 8).join(", ")}`
-          : "no warnings on priority routes",
+          : "no warnings on the port's priority routes",
       },
+      ...(carryBack.length
+        ? [
+            {
+              ok: false,
+              note: true,
+              text: `the port is faster, worth carrying back: ${carryBack.slice(0, 6).join(", ")}`,
+            },
+          ]
+        : []),
       {
         ok: true,
         text: `${ledger.experiments.filter((x) => x.decision?.verdict === "keep").length} kept, ${ledger.experiments.filter((x) => x.decision?.verdict === "discard").length} discarded`,
@@ -284,10 +315,12 @@ export async function planOf(project: Project): Promise<Plan> {
     id: "launch",
     title: `Switch over${ready.track ? `: ${ready.track}` : ""}`,
     done: ready.score >= 1,
-    checks: Object.entries(ready.byTarget).map(([t, s]) => ({
-      ok: s >= 1,
-      text: `${t}: ${Math.round(s * 100)}% of priority traffic, weighted by region, passes`,
-    })),
+    checks: Object.entries(ready.byTarget)
+      .filter(([t]) => t === tracks.at(-1)?.port)
+      .map(([t, s]) => ({
+        ok: s >= 1,
+        text: `${t}: ${Math.round(s * 100)}% of priority traffic, weighted by region, passes`,
+      })),
     next: ["hch status --gate"],
   })
 

@@ -165,6 +165,24 @@ point at which an improvement found during the port gets carried back, so both s
 together and the switch itself changes as little as possible. A target with `ratchet: false`,
 such as `localhost`, never moves the bar.
 
+## Tracks
+
+A port is usually worked on in dev mode for weeks before it is deployed anywhere readers could
+reach, and the dev server is where most of the parity work happens. So the current site is
+profiled twice, in production and in dev mode, and each port target is compared with the current
+site's target on the same track: the port's dev server with the current site's dev server, the
+deployed port with production.
+
+Only production is held to the lock. A dev server renders every request, compiles on demand and
+logs to a terminal; its numbers say how the two codebases compare under the same handicap, which
+is useful, but they are not a bar to hold anyone to. On the dev track the current site's dev
+server is the reference: it passes by definition, and it warns when its own port is faster on a
+route, which is the same cue to carry a change back as on production.
+
+Dev targets name the vantages that can reach them (`"vantages": ["local"]`), since a laptop's
+`localhost` is not reachable from a runner in another region, and say `"purge": false`, since
+there is no cache to purge.
+
 ## Survey and phases
 
 Before measuring, the port needs to know which routes matter. Sources return rows of path, views,
@@ -208,7 +226,33 @@ can run anywhere observations can be read. The likely path, once the standalone 
 - The pass/fail policy table in scenetest-cloud's `gate.cjs` (`no-new`, `must-pass`, budgets)
   maps onto the cache policy and allowances here; the two should converge on one vocabulary.
 
+## Delivery
+
+The harness is a command-line tool and a library. It is not a Vite plugin or a framework
+integration: it measures sites from the outside, over HTTP and through a browser, which is the
+only view that is the same for the current site and the port, whatever each is built with. A Vite
+plugin could still be a convenience for the dev track later, starting the dev server and naming
+its URL as a target, but nothing in the method depends on one.
+
+What a project holds:
+
+- `harness.config.json`, `harness.lock.json`, `harness.ledger.json` and `harness/`: committed,
+  reviewed like code, and the whole of what a second person or agent needs to pick the port up.
+- `.harness/harness.db`: SQLite through `node:sqlite`, so there is no native module to build. It
+  holds every measurement and is local to the machine; the lock and ledger hold what was decided
+  from it.
+
+What an agent gets:
+
+- A skill, installed by `hch init` into `.claude/skills/http-contract-harness/`, that tells it
+  when the harness applies, to start from `hch plan --json`, and what needs a person.
+- `--json` on every command, and `hch guide` for agents without skills.
+- `hch serve`, a dashboard that follows the files and the database as the agent changes them, so
+  a person can watch the port from a browser.
+
 ## Not built yet
+
+- Publishing to npm, so `npx http-contract-harness` works without a clone.
 
 - A Cloudflare runner: a Worker and Durable Objects with location hints that run probes and launch
   Browser Run sessions. Probes would have to be bundled into it at deploy time, since a Worker

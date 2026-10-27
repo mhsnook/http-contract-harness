@@ -6,6 +6,7 @@ import {
   type FieldPolicy,
   type FieldSpec,
   type Lock,
+  referenceOf,
 } from "./config.ts"
 import type { Observation } from "./db.ts"
 import { casesOf, probeOf, weightOf } from "./project.ts"
@@ -30,7 +31,7 @@ export type CaseVerdict = {
   caseId: string
   probe: string
   vantage: string
-  reference: "lock" | "baseline" | "none"
+  reference: "lock" | "baseline" | "self" | "none"
   // Set when the lock was taken with a different version of the probe than the one that measured.
   stale?: string
   state: State
@@ -62,7 +63,9 @@ export type Evaluation = {
   vantage: string
   routes: RouteVerdict[]
   counts: Record<State, number>
+  // Only the allowances that name this target, or no target.
   unusedAllowances: string[]
+  usedAllowances: string[]
 }
 
 export type ProbeInfo = { hash: string; primary: string; fields?: Record<string, FieldSpec> }
@@ -283,6 +286,8 @@ export type EvaluateInput = {
   probes?: Map<string, ProbeInfo>
   reference?: Observation[]
   useLock?: boolean
+  // Two runs named by hand, judged against each other alone rather than in batches.
+  compare?: boolean
   // Every target's observations from the batches `observations` came from, the target's own
   // included, plus the batch before each (`previous` maps one to the other).
   peers?: Observation[]
@@ -322,7 +327,14 @@ export function evaluate(input: EvaluateInput): Evaluation {
       locked?.probe && hash && locked.probe.hash !== hash
         ? `locked with ${locked.probe.name}@${locked.probe.hash}, measured with ${probeName}@${hash}`
         : undefined
-    const kind: CaseVerdict["reference"] = locked ? "lock" : refs.length > 0 ? "baseline" : "none"
+    const isReference = !useLock && target === (input.baseline ?? config.baseline)
+    const kind: CaseVerdict["reference"] = locked
+      ? "lock"
+      : isReference
+        ? "self"
+        : refs.length > 0
+          ? "baseline"
+          : "none"
     const specFor = (field: string) =>
       specOf(def.fields?.[field] ?? route.fields?.[field] ?? probe?.fields?.[field])
 
@@ -372,9 +384,11 @@ export function evaluate(input: EvaluateInput): Evaluation {
             vantage,
             target,
             baseline: input.baseline ?? config.baseline,
-            ratcheted: (name) => config.targets[name]?.ratchet ?? false,
+            // Only a port measured against this target is a change to carry back to it.
+            ratcheted: (name) =>
+              (config.targets[name]?.ratchet ?? false) && referenceOf(config, name) === target,
             call,
-            explicitReference: !useLock,
+            explicitReference: input.compare ?? false,
           },
           probe?.primary ?? "primary",
         )
@@ -385,13 +399,14 @@ export function evaluate(input: EvaluateInput): Evaluation {
     let contractState: State
     let note: string | undefined
     if (diffs.some((d) => d.field === "error")) contractState = "fail"
+    else if (kind === "self" && seen.length > 0) contractState = "pass"
     else if (seen.length === 0 || kind === "none" || stale) contractState = "unknown"
     else if (hard.length > 0) contractState = "fail"
     else if (soft.length > 0) {
       // A field that only matters while the route is slow: a lost cache on a page that is still
       // fast enough is a note, not a failure.
       contractState = perf.state === "pass" ? "warn" : perf.state === "warn" ? "warn" : "fail"
-      note = `${soft.map((d) => d.field).join(", ")} changed; ${perf.state === "pass" ? "fast enough anyway" : "and not shown to be fast enough"}`
+      note = `${[...new Set(soft.map((d) => d.field))].join(", ")} changed, and the route is ${perf.state === "pass" ? "fast enough anyway" : "not shown to be fast enough"}`
     } else contractState = "pass"
 
     const verdict: CaseVerdict = {
@@ -431,6 +446,10 @@ export function evaluate(input: EvaluateInput): Evaluation {
     vantage,
     routes: list,
     counts,
-    unusedAllowances: config.allow.map((a) => a.id).filter((id) => !usedAllowances.has(id)),
+    unusedAllowances: config.allow
+      .filter((a) => a.target === undefined || a.target === target)
+      .map((a) => a.id)
+      .filter((id) => !usedAllowances.has(id)),
+    usedAllowances: [...usedAllowances],
   }
 }
