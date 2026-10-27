@@ -1,3 +1,4 @@
+import { judgedByLock, reachableFrom, referenceOf } from "./config.ts"
 import type { Observation } from "./db.ts"
 import type { Project } from "./project.ts"
 import { evaluate, type Evaluation, type ProbeInfo } from "./verdict.ts"
@@ -29,9 +30,11 @@ export async function statusOf(
   const names = opts.targets?.length ? opts.targets : Object.keys(config.targets)
   const out: TargetEvaluation[] = []
   for (const vantage of vantagesOf(project, opts.vantages)) {
-    const reference = store.latestFor(config.baseline, vantage)
     for (const target of names) {
       if (!config.targets[target]) throw new Error(`No target "${target}"`)
+      if (!reachableFrom(config, target, vantage)) continue
+      const against = referenceOf(config, target)
+      const reference = target === against ? [] : store.latestFor(against, vantage)
       const observations = store.latestFor(target, vantage, opts.label)
       const batches = [...new Set(observations.flatMap((o) => (o.batch == null ? [] : [o.batch])))]
       const previous = new Map(
@@ -50,7 +53,9 @@ export async function statusOf(
           vantage,
           observations,
           probes,
-          reference: target === config.baseline ? [] : reference,
+          baseline: against,
+          useLock: judgedByLock(config, target),
+          reference,
           peers: store.inBatches([...batches, ...previous.values()]),
           previous,
         }),

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { LEDGER_FILE, caseKey, writeSorted } from "./config.ts"
+import { LEDGER_FILE, caseKey, judgedByLock, referenceOf, writeSorted } from "./config.ts"
 import type { Observation } from "./db.ts"
 import { casesOf, probeOf, type Project } from "./project.ts"
 import { reasonOf } from "./report.ts"
@@ -92,7 +92,8 @@ function referenceFor(project: Project, target: string, against?: string): strin
     if (!project.config.targets[against]) throw new Error(`No target "${against}"`)
     return against
   }
-  if (target !== project.config.baseline) return project.config.baseline
+  const own = referenceOf(project.config, target)
+  if (own !== target) return own
   const other = Object.keys(project.config.targets).find((t) => t !== target)
   if (!other) throw new Error("An experiment needs a second target to measure drift against")
   return other
@@ -247,6 +248,8 @@ export async function compute(
       vantage,
       observations: afterTarget,
       probes,
+      baseline: e.reference,
+      useLock: judgedByLock(project.config, e.target),
       reference: afterReference,
       peers: [...afterTarget, ...afterReference],
     })

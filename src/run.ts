@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process"
 import { arch, cpus, platform, release } from "node:os"
-import { expandHeaders } from "./config.ts"
+import { expandHeaders, reachableFrom } from "./config.ts"
 import type { Observation } from "./db.ts"
 import { runEngine, type EngineResult, type EngineSpec } from "./engine.ts"
 import type { ProbeTarget } from "./probe.ts"
@@ -81,14 +81,18 @@ export async function runBatch(project: Project, opts: BatchOptions): Promise<Ba
     node: process.version,
   })
   const sha = gitSha(project.root)
-  const total = requests.length * targets.length * vantages.length
+  const total =
+    requests.length *
+    vantages.reduce((n, v) => n + targets.filter((t) => reachableFrom(config, t.name, v)).length, 0)
   let done = 0
   const observations: Observation[] = []
 
   const one = async (vantageName: string) => {
     const vantage = config.vantages[vantageName]!
+    const here = targets.filter((t) => reachableFrom(config, t.name, vantageName))
+    if (here.length === 0) return undefined
     let batch: number | null = null
-    const runs = targets.map((t) => {
+    const runs = here.map((t) => {
       const runId = store.startRun({
         target: t.name,
         vantage: vantageName,
@@ -155,7 +159,7 @@ export async function runBatch(project: Project, opts: BatchOptions): Promise<Ba
         const payload: RunnerPayload = {
           ...common,
           vantage: vantageName,
-          targets,
+          targets: here,
           probes: [...used].flatMap((name) => {
             const p = probes.get(name)
             return p ? [{ name, hash: p.hash, bundle: p.bundle }] : []
@@ -167,7 +171,7 @@ export async function runBatch(project: Project, opts: BatchOptions): Promise<Ba
       } else {
         const spec: EngineSpec = {
           ...common,
-          targets,
+          targets: here,
           probes,
           vantage: { name: vantageName, region: vantage.region, browser: vantage.browser },
           cwd: project.root,
@@ -180,6 +184,6 @@ export async function runBatch(project: Project, opts: BatchOptions): Promise<Ba
     return { vantage: vantageName, batch: runs[0]!.runId, region, runs }
   }
 
-  const batches = await Promise.all(vantages.map(one))
+  const batches = (await Promise.all(vantages.map(one))).filter((b) => b !== undefined)
   return { batches, observations, missingHeaders }
 }

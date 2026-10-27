@@ -278,6 +278,8 @@ export type EvaluateInput = {
   target: string
   vantage: string
   observations: Observation[]
+  // The target this one is compared with; the config's baseline unless a track says otherwise.
+  baseline?: string
   probes?: Map<string, ProbeInfo>
   reference?: Observation[]
   useLock?: boolean
@@ -369,7 +371,7 @@ export function evaluate(input: EvaluateInput): Evaluation {
             locked,
             vantage,
             target,
-            baseline: config.baseline,
+            baseline: input.baseline ?? config.baseline,
             ratcheted: (name) => config.targets[name]?.ratchet ?? false,
             call,
             explicitReference: !useLock,

@@ -37,6 +37,8 @@ const target = z.object({
   ratchet: z.boolean().default(true),
   // Anything the project's probes want to know about this target, such as how to purge it.
   options: z.record(z.string(), z.unknown()).default({}),
+  // The vantages that can reach this target; a dev server on localhost only answers this machine.
+  vantages: z.array(z.string()).optional(),
   note: z.string().optional(),
 })
 export type Target = z.infer<typeof target>
@@ -71,6 +73,19 @@ export const configSchema = z.object({
   baseline: z.string(),
   targets: z.record(z.string(), target),
   vantages: z.record(z.string(), vantage).default({ local: { browser: {} } }),
+  // Each track pairs a target running the current site with the one running the port, such as
+  // dev mode against dev mode and a deployment against production. A port is judged against its
+  // own track's baseline, in the order the tracks are listed.
+  tracks: z
+    .array(
+      z.object({
+        name: z.string(),
+        baseline: z.string(),
+        port: z.string(),
+        note: z.string().optional(),
+      }),
+    )
+    .default([]),
   // The share of readers each region holds, from `hch survey` or by hand, such as
   // { "weur": 0.8, "enam": 0.15 }. Launch readiness weighs each route's result by it.
   regions: z.record(z.string(), z.number()).default({}),
@@ -236,6 +251,12 @@ export function readConfig(root: string): Config {
     throw new Error(`baseline "${config.baseline}" is not one of the targets in ${CONFIG_FILE}`)
   }
   if (Object.keys(config.vantages).length === 0) config.vantages = { local: { browser: {} } }
+  for (const t of config.tracks) {
+    for (const name of [t.baseline, t.port]) {
+      if (!config.targets[name])
+        throw new Error(`track "${t.name}" names "${name}", which is not a target`)
+    }
+  }
   return config
 }
 
@@ -271,6 +292,31 @@ export function writeLock(root: string, lock: Lock): void {
 export function writeConfig(root: string, config: unknown): void {
   writeFileSync(join(root, CONFIG_FILE), JSON.stringify(config, null, 2) + "\n")
 }
+
+export type Track = Config["tracks"][number]
+
+/** The tracks, or one per target besides the baseline when the config lists none. */
+export function tracksOf(config: Config): Track[] {
+  if (config.tracks.length) return config.tracks
+  return Object.keys(config.targets)
+    .filter((t) => t !== config.baseline)
+    .map((t) => ({ name: t, baseline: config.baseline, port: t }))
+}
+
+/** The target another target's numbers are compared with: its track's baseline, or itself. */
+export function referenceOf(config: Config, target: string): string {
+  const tracks = tracksOf(config)
+  if (tracks.some((t) => t.baseline === target) || target === config.baseline) return target
+  return tracks.find((t) => t.port === target)?.baseline ?? config.baseline
+}
+
+// The lock is taken from the baseline, so only targets compared with the baseline are judged by
+// it; a dev-mode port is judged by the current site in dev mode, never by production's numbers.
+export const judgedByLock = (config: Config, target: string) =>
+  referenceOf(config, target) === config.baseline
+
+export const reachableFrom = (config: Config, target: string, vantage: string) =>
+  config.targets[target]?.vantages?.includes(vantage) ?? true
 
 export const caseKey = (pattern: string, caseId: string) => `${pattern}#${caseId}`
 

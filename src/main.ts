@@ -127,7 +127,8 @@ the sources (where traffic numbers come from). The harness keeps every measureme
 same way every time, and remembers what was tried.
 
 Set up
-  init [--baseline-url URL] [--candidate-url URL]   config, lock, starter probes and sources
+  init --current URL --port URL [--current-dev URL --port-dev URL]
+                                                     config, tracks, starter probes and sources, agent skill
   probe list | probe new <name> [--from http|page|navigate|command] | probe show <name>
   survey [--csv FILE]… [--source NAME]… [--regions] where readers go, land and come from
   discover [--sitemap] [--next .next] [--traffic] [--urls FILE] [--rebuild]
@@ -176,7 +177,7 @@ async function main(argv: string[]) {
   }
 }
 
-function copyStarters(kind: "probes" | "sources", into: string, prefix = "") {
+function copyStarters(kind: "probes" | "sources" | "skill", into: string, prefix = "") {
   mkdirSync(into, { recursive: true })
   const copied: string[] = []
   for (const file of readdirSync(join(STARTERS, kind))) {
@@ -190,19 +191,38 @@ function copyStarters(kind: "probes" | "sources", into: string, prefix = "") {
 
 function init(argv: string[]) {
   const { values } = parse(argv, {
-    "baseline-url": { type: "string", default: "https://www.example.com" },
-    "candidate-url": { type: "string", default: "https://port.example.com" },
-    baseline: { type: "string", default: "legacy" },
-    candidate: { type: "string", default: "port" },
+    current: { type: "string", default: "https://www.example.com" },
+    port: { type: "string", default: "https://port.example.com" },
+    "current-dev": { type: "string" },
+    "port-dev": { type: "string" },
+    "no-skill": { type: "boolean", default: false },
   })
   const root = process.cwd()
   if (existsSync(join(root, CONFIG_FILE))) throw new Error(`${CONFIG_FILE} already exists here`)
+  const dev = Boolean(values["current-dev"] && values["port-dev"])
+  const targets: Record<string, unknown> = {
+    current: { url: values.current, note: "the site readers use today" },
+    port: { url: values.port, note: "the port, deployed the way it will go live" },
+  }
+  if (dev) {
+    targets["current-dev"] = {
+      url: values["current-dev"],
+      vantages: ["local"],
+      note: "the current site in dev mode",
+    }
+    targets["port-dev"] = {
+      url: values["port-dev"],
+      vantages: ["local"],
+      note: "the port in dev mode",
+    }
+  }
   writeConfig(root, {
-    baseline: values.baseline,
-    targets: {
-      [values.baseline as string]: { url: values["baseline-url"] },
-      [values.candidate as string]: { url: values["candidate-url"] },
-    },
+    baseline: "current",
+    targets,
+    tracks: [
+      ...(dev ? [{ name: "dev", baseline: "current-dev", port: "port-dev" }] : []),
+      { name: "production", baseline: "current", port: "port" },
+    ],
     vantages: { local: { note: "this machine" } },
     regions: {},
     allow: [],
@@ -211,6 +231,9 @@ function init(argv: string[]) {
   const probes = copyStarters("probes", join(root, PROBES_DIR))
   // Copied switched off: a source needs credentials and a check against a real account first.
   const sources = copyStarters("sources", join(root, SOURCES_DIR), "_")
+  const skill = values["no-skill"]
+    ? []
+    : copyStarters("skill", join(root, ".claude/skills/http-contract-harness"))
   const gitignore = join(root, ".gitignore")
   const ignored = existsSync(gitignore) ? readFileSync(gitignore, "utf8") : ""
   if (!ignored.split("\n").includes(STATE_DIR)) {
@@ -218,11 +241,14 @@ function init(argv: string[]) {
   }
   console.log(
     [
-      `Wrote ${CONFIG_FILE}, ${LOCK_FILE}, ${probes.length} starter probes in ${PROBES_DIR}/ and ${sources.length} starter sources in ${SOURCES_DIR}/ (off until renamed without the _).`,
+      `Wrote ${CONFIG_FILE} with ${dev ? "a dev track and a production track" : "a production track"}, ${LOCK_FILE}, ${probes.length} starter probes in ${PROBES_DIR}/ and ${sources.length} starter sources in ${SOURCES_DIR}/ (off until renamed without the _).`,
+      skill.length ? "Installed the agent skill in .claude/skills/http-contract-harness/." : "",
       "",
       "The probes and sources are yours: read them, change them, add more.",
       "`hch plan` says what to do next, in order. `hch guide` explains the method.",
-    ].join("\n"),
+    ]
+      .filter((l, i) => l || i > 1)
+      .join("\n"),
   )
 }
 

@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { judgedByLock, readConfig, referenceOf, tracksOf } from "../src/config.ts"
 import { discover } from "../src/discover/index.ts"
 import { planOf, priorityRoutes } from "../src/plan.ts"
 import { openProject, type Project } from "../src/project.ts"
@@ -96,7 +97,7 @@ describe("the survey", () => {
       "survey",
       "inventory",
       "profile",
-      "parity",
+      "parity:port",
       "improve",
       "launch",
     ])
@@ -108,5 +109,62 @@ describe("the survey", () => {
     expect(plan.phase).toBe("profile")
     const profile = plan.phases.find((p) => p.id === "profile")!
     expect(profile.checks.find((c) => c.text.includes("no vantage"))!.text).toContain("weur")
+  })
+})
+
+describe("tracks", () => {
+  it("judge each port against its own track, and only production by the lock", () => {
+    const d = makeProject({
+      baseline: "current",
+      targets: {
+        current: { url: "https://www.example.com" },
+        "current-dev": { url: "http://localhost:3000", vantages: ["local"] },
+        "port-dev": { url: "http://localhost:3001", vantages: ["local"] },
+        port: { url: "https://port.example.com" },
+      },
+      tracks: [
+        { name: "dev", baseline: "current-dev", port: "port-dev" },
+        { name: "production", baseline: "current", port: "port" },
+      ],
+    })
+    const config = readConfig(d)
+    expect(tracksOf(config).map((t) => t.name)).toEqual(["dev", "production"])
+    expect(referenceOf(config, "port-dev")).toBe("current-dev")
+    expect(referenceOf(config, "current-dev")).toBe("current-dev")
+    expect(referenceOf(config, "port")).toBe("current")
+    expect(judgedByLock(config, "port-dev")).toBe(false)
+    expect(judgedByLock(config, "port")).toBe(true)
+    rmSync(d, { recursive: true, force: true })
+  })
+
+  it("plan dev parity before production parity", async () => {
+    const d = makeProject({
+      baseline: "current",
+      targets: {
+        current: { url: "http://127.0.0.1:9" },
+        "current-dev": { url: "http://127.0.0.1:9" },
+        "port-dev": { url: "http://127.0.0.1:9" },
+        port: { url: "http://127.0.0.1:9" },
+      },
+      tracks: [
+        { name: "dev", baseline: "current-dev", port: "port-dev" },
+        { name: "production", baseline: "current", port: "port" },
+      ],
+    })
+    const p = openProject(d)
+    const plan = await planOf(p)
+    expect(plan.phases.map((x) => x.id)).toEqual([
+      "survey",
+      "inventory",
+      "profile",
+      "parity:dev",
+      "parity:production",
+      "improve",
+      "launch",
+    ])
+    expect(plan.phases[2]!.title).toContain("current-dev, current")
+    expect(plan.readiness.track).toBe("production")
+    p.store.close()
+    rmSync(d, { recursive: true, force: true })
   })
 })

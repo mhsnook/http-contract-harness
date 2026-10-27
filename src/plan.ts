@@ -1,3 +1,4 @@
+import { tracksOf } from "./config.ts"
 import { readLedger } from "./ledger.ts"
 import { casesOf, type Project } from "./project.ts"
 import { statusOf, type TargetEvaluation } from "./status.ts"
@@ -5,16 +6,17 @@ import { summariseTraffic } from "./survey.ts"
 
 export type Check = { ok: boolean; text: string }
 export type Phase = {
-  id: "survey" | "inventory" | "profile" | "parity" | "improve" | "launch"
+  // survey, inventory, profile, parity:<track> for each track in order, improve, launch
+  id: string
   title: string
   done: boolean
   checks: Check[]
   next: string[]
 }
 export type Plan = {
-  phase: Phase["id"]
+  phase: string
   priority: string[]
-  readiness: { score: number; byTarget: Record<string, number> }
+  readiness: { score: number; byTarget: Record<string, number>; track?: string }
   phases: Phase[]
 }
 
@@ -58,9 +60,9 @@ function readiness(project: Project, evals: TargetEvaluation[], priority: string
     if (regions.length === 0 || !region) return 1
     return config.regions[region] ?? 0
   }
+  const tracks = tracksOf(config)
   const byTarget: Record<string, number> = {}
-  for (const target of Object.keys(config.targets)) {
-    if (target === config.baseline) continue
+  for (const target of tracks.map((t) => t.port)) {
     let got = 0
     let of = 0
     for (const e of evals.filter((x) => x.target === target)) {
@@ -74,8 +76,9 @@ function readiness(project: Project, evals: TargetEvaluation[], priority: string
     }
     byTarget[target] = of ? Math.round((got / of) * 1000) / 1000 : 0
   }
-  const values = Object.values(byTarget)
-  return { score: values.length ? Math.min(...values) : 0, byTarget }
+  // The last track is the one that goes live, so its port's readiness is the launch score.
+  const last = tracks.at(-1)
+  return { score: last ? (byTarget[last.port] ?? 0) : 0, byTarget, track: last?.name }
 }
 
 export async function planOf(project: Project): Promise<Plan> {
@@ -85,7 +88,7 @@ export async function planOf(project: Project): Promise<Plan> {
   const priority = priorityRoutes(project)
   const evals = await statusOf(project)
   const ledger = readLedger(project.root)
-  const candidates = Object.keys(config.targets).filter((t) => t !== config.baseline)
+  const tracks = tracksOf(config)
   const vantages = Object.keys(config.vantages)
 
   const surveyed = summariseTraffic(
@@ -156,13 +159,14 @@ export async function planOf(project: Project): Promise<Plan> {
     ],
   })
 
-  const base = evals.filter((e) => e.target === config.baseline)
+  const currents = [...new Set(tracks.length ? tracks.map((t) => t.baseline) : [config.baseline])]
   const unprofiled: string[] = []
   const unlocked: string[] = []
   for (const pattern of priority) {
-    for (const e of base) {
+    for (const e of evals.filter((x) => currents.includes(x.target))) {
       const r = e.evaluation.routes.find((x) => x.route === pattern)
-      if (!r || r.cases.some((c) => !c.observed)) unprofiled.push(`${pattern} from ${e.vantage}`)
+      if (!r || r.cases.some((c) => !c.observed))
+        unprofiled.push(`${pattern} on ${e.target}/${e.vantage}`)
     }
     for (const [p, , caseId, def] of casesOf(lock))
       if (p === pattern && !def.expect) unlocked.push(`${p}#${caseId}`)
@@ -172,8 +176,8 @@ export async function planOf(project: Project): Promise<Plan> {
     {
       ok: unprofiled.length === 0,
       text: unprofiled.length
-        ? `not measured on ${config.baseline}: ${unprofiled.slice(0, 8).join(", ")}`
-        : `every priority route measured on ${config.baseline}`,
+        ? `not measured yet: ${unprofiled.slice(0, 8).join(", ")}`
+        : `every priority route measured on ${currents.join(" and ")}`,
     },
     {
       ok: missingRegions.length === 0,
@@ -185,7 +189,7 @@ export async function planOf(project: Project): Promise<Plan> {
       ok: unlocked.length === 0,
       text: unlocked.length
         ? `${unlocked.length} priority cases unlocked`
-        : "every priority case is locked",
+        : `every priority case is locked from ${config.baseline}`,
     },
     {
       ok: ledger.findings.length > 0,
@@ -194,44 +198,51 @@ export async function planOf(project: Project): Promise<Plan> {
   ]
   phase({
     id: "profile",
-    title: "Measure the current site, from where its readers are, and lock it in",
+    title: `Benchmark the current site on every track: ${currents.join(", ")}`,
     done: profileChecks.slice(0, 3).every((c) => c.ok),
     checks: profileChecks,
     next: [
-      "hch run --target " + config.baseline,
+      `hch run ${currents.map((t) => `--target ${t}`).join(" ")}`,
       "hch lock --from " + config.baseline,
       'hch note "<what you learned about how this stack caches, renders or counts>" --route <route>',
     ],
   })
 
-  const parityFails: string[] = []
-  for (const e of evals.filter((x) => candidates.includes(x.target))) {
-    for (const pattern of priority) {
-      const r = e.evaluation.routes.find((x) => x.route === pattern)
-      if (!r || r.state === "fail" || r.state === "unknown")
-        parityFails.push(`${pattern} on ${e.target}/${e.vantage}`)
+  for (const track of tracks) {
+    const fails: string[] = []
+    const measured = evals.filter((x) => x.target === track.port)
+    for (const e of measured) {
+      for (const pattern of priority) {
+        const r = e.evaluation.routes.find((x) => x.route === pattern)
+        if (!r || r.state === "fail" || r.state === "unknown")
+          fails.push(`${pattern} from ${e.vantage}`)
+      }
     }
+    phase({
+      id: `parity:${track.name}`,
+      title: `${track.name}: bring ${track.port} up to ${track.baseline}`,
+      done: measured.length > 0 && fails.length === 0,
+      checks: [
+        {
+          ok: measured.length > 0,
+          text: measured.length
+            ? `${track.port} measured from ${measured.map((e) => e.vantage).join(", ")}`
+            : `${track.port} not measured yet`,
+        },
+        {
+          ok: fails.length === 0,
+          text: fails.length
+            ? `${fails.length} priority routes failing or unmeasured: ${fails.slice(0, 8).join(", ")}`
+            : `every priority route passes or warns against ${track.baseline}`,
+        },
+      ],
+      next: [
+        `hch run --target ${track.baseline} --target ${track.port}`,
+        `hch status --target ${track.port}`,
+        "hch show <route>",
+      ],
+    })
   }
-  phase({
-    id: "parity",
-    title: "Bring the port to the lock on the priority routes",
-    done: candidates.length > 0 && parityFails.length === 0,
-    checks: [
-      {
-        ok: candidates.length > 0,
-        text: candidates.length
-          ? `candidates: ${candidates.join(", ")}`
-          : "no target besides the baseline",
-      },
-      {
-        ok: parityFails.length === 0,
-        text: parityFails.length
-          ? `${parityFails.length} failing or unmeasured: ${parityFails.slice(0, 8).join(", ")}`
-          : "every priority route passes or warns",
-      },
-    ],
-    next: ["hch run", "hch status", "hch show <route>"],
-  })
 
   const open = ledger.experiments.filter((x) => !x.decision)
   const warns = evals.flatMap((e) =>
@@ -271,7 +282,7 @@ export async function planOf(project: Project): Promise<Plan> {
   const ready = readiness(project, evals, priority)
   phase({
     id: "launch",
-    title: "Switch over",
+    title: `Switch over${ready.track ? `: ${ready.track}` : ""}`,
     done: ready.score >= 1,
     checks: Object.entries(ready.byTarget).map(([t, s]) => ({
       ok: s >= 1,
