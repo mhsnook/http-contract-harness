@@ -40,6 +40,51 @@ CLI, deploys two fixes along the way by flipping switches on the simulated port,
 dashboard and the sites running so you can carry on by hand. `--until profile` stops after a
 phase; `--dir` keeps the project somewhere you choose.
 
+## A port, stage by stage
+
+These are the dashboard (`hch serve`) at seven points in `hch demo`. Each shows the plan, with its
+phase strip, above every route on every target, from two vantages. The sites are simulated and both
+vantages run on one machine, so the numbers show how the method works, not how any host performs.
+
+**1. Inventory.** The survey has weighted the routes by traffic, and nothing has been measured yet.
+
+![Every route listed and weighted, every cell grey](docs/screenshots/1-inventory.png)
+
+**2. Profile.** The current site is measured in production and in dev mode and locked. Its dev
+server is the reference for the dev track. The port has not run.
+
+![The current site green on both tracks, the port grey](docs/screenshots/2-profile.png)
+
+**3. Dev parity, failing.** The port's dev server answers `/old-events` with a 308 where the current
+site answers 301. Readers land there from old links, so it is a priority route, and the dev phase
+waits for it. The port also renders blog posts faster, so the current site is asked to carry that
+back.
+
+![One red cell on the port's dev server: status 301 → 308](docs/screenshots/3-dev-failing.png)
+
+**4. Dev parity, passing.** With the redirect fixed, the dev phase is ticked off and production is
+next.
+
+![The port's dev server green on every route](docs/screenshots/4-dev-passing.png)
+
+**5. Production parity, failing.** Deployed, the port has lost the edge cache on event pages and
+serves city pages from a slower data cache. Two batches in a row agree, so both fail rather than
+warn.
+
+![Event and city pages red on the deployed port, from both vantages](docs/screenshots/5-production-failing.png)
+
+**6. An experiment.** Caching the event page at the edge, measured before and after, is kept with
+its reason. The event page turns green, and the port now beats the lock on a cold request.
+
+![The event page green, city pages still red, one kept experiment](docs/screenshots/6-experiment.png)
+
+**7. Good enough.** A second experiment, prerendering the city pages, changes nothing and is
+discarded. A person decides 50 ms is good enough for a city page and sets a 100 ms ceiling with
+`hch loosen --max 100 --reason "…"`. The case shows the decision and its reason, the route turns
+green, and every phase is done.
+
+![Every route green, the city page's ceiling and its reason shown](docs/screenshots/7-good-enough.png)
+
 ## Start
 
 ```sh
@@ -264,6 +309,7 @@ pnpm test        # unit tests, the whole loop against two fixture sites, a brows
 pnpm typecheck
 pnpm build
 pnpm format
+node scripts/screenshots.mjs   # retake docs/screenshots from a run of the demo (after pnpm build)
 ```
 
 [docs/design.md](docs/design.md) records why it works the way it does.

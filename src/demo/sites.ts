@@ -67,14 +67,14 @@ export function startSite(kind: SiteKind, fixes: Fixes): Promise<{ url: string; 
       path: string,
       title: string,
       body: string,
-      opts: { cacheable?: boolean; renderMs?: number } = {},
+      opts: { cacheable?: boolean; renderMs?: number; hitMs?: number } = {},
     ) => {
       const cacheable = opts.cacheable ?? true
       const cached = !isDev && cacheable && seen > 1
       const ms = isDev
         ? jitter((opts.renderMs ?? 60) * 2.5)
         : cached
-          ? jitter(12)
+          ? jitter(opts.hitMs ?? 12)
           : jitter(opts.renderMs ?? 60)
       await sleep(ms)
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", ...edge(cached) })
@@ -147,7 +147,11 @@ export function startSite(kind: SiteKind, fixes: Fixes): Promise<{ url: string; 
     }
     const city = /^\/([a-z-]+)\/([a-z-]+)$/.exec(path)
     if (city && CITIES.some(([c, n]) => c === city[1] && n === city[2])) {
-      return render(path, `Protests in ${city[2]}`, "<ul><li>…</li></ul>", { renderMs: 80 })
+      // The port serves these from a data cache in one region rather than from the edge.
+      return render(path, `Protests in ${city[2]}`, "<ul><li>…</li></ul>", {
+        renderMs: 80,
+        hitMs: kind === "port" ? 50 : undefined,
+      })
     }
     if (path === "/api/events") {
       await sleep(isDev ? jitter(120) : jitter(20))
@@ -188,4 +192,5 @@ export const DEMO_TRAFFIC = `page,pageviews,entrances,country
 /blog,200,40,GB
 /blog/how-we-verify-events,260,210,GB
 /donate,180,20,GB
+/old-events,60,1500,GB
 `

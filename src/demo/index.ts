@@ -23,7 +23,19 @@ export type DemoOptions = {
   repeats?: number
   quiet?: boolean
   serve?: boolean
+  // Called at each point in the story worth a look, with the dashboard already following along.
+  checkpoint?: (name: Checkpoint) => Promise<void>
 }
+
+export type Checkpoint =
+  | "inventory"
+  | "profile"
+  | "dev-failing"
+  | "dev-passing"
+  | "production-failing"
+  | "experiment"
+  | "good-enough"
+  | "done"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, "../..")
@@ -143,6 +155,13 @@ export async function runDemo(opts: DemoOptions = {}) {
     print(pc.dim(`\n(deployed: ${what})`))
   }
   const stopAfter = (step: Step) => opts.until === step
+  const checkpoint = (name: Checkpoint) => opts.checkpoint?.(name)
+
+  let dashboard: { url: string; close(): Promise<void> } | undefined
+  if (opts.serve !== false) {
+    dashboard = await serve(openProject(dir), { port: opts.port ?? 4800, host: "127.0.0.1" })
+    print(pc.bold(`Dashboard: ${dashboard.url} (it follows the port as the demo runs)`))
+  }
 
   const steps: Record<Step, () => Promise<void>> = {
     survey: async () => {
@@ -194,6 +213,7 @@ export async function runDemo(opts: DemoOptions = {}) {
         await hch("case", "add", "/", "first-load", "--probe", "page")
       }
       await hch("routes")
+      await checkpoint("inventory")
     },
     profile: async () => {
       say("3. Profile: benchmark the current site, in production and in dev mode, and lock it in")
@@ -208,16 +228,22 @@ export async function runDemo(opts: DemoOptions = {}) {
         "cache",
       )
       await hch("plan")
+      await checkpoint("profile")
     },
     dev: async () => {
       say("4. Dev parity: the port in dev mode, against the current site in dev mode")
       await hch("run", "--target", "current-dev", "--target", "port-dev")
       await hch("status", "--target", "port-dev")
+      say(
+        "Readers still land on /old-events from old links in search results, so it is a priority route",
+      )
       await hch("show", "/old-events")
+      await checkpoint("dev-failing")
       deploy("redirect", "the port's /old-events redirect answers 301 again")
       await hch("run", "--target", "current-dev", "--target", "port-dev")
       say("The port renders blog posts faster than the current site: a change to carry back")
       await hch("status", "--target", "current-dev", "--target", "port-dev", "--all")
+      await checkpoint("dev-passing")
     },
     production: async () => {
       say("5. Production parity: the deployed port, against production, from where readers are")
@@ -225,6 +251,7 @@ export async function runDemo(opts: DemoOptions = {}) {
       await hch("run", "--target", "current", "--target", "port")
       await hch("status", "--target", "port")
       await hch("show", "/event/:city/:id#default")
+      await checkpoint("production-failing")
     },
     experiment: async () => {
       say("6. Improve: one theory, measured before and after, decided and written down")
@@ -248,6 +275,7 @@ export async function runDemo(opts: DemoOptions = {}) {
         "--why",
         "TTFB fell by the render time and the cache header matches production again",
       )
+      await checkpoint("experiment")
       say("…and a theory that did not pan out, written down so no one tries it again")
       await hch(
         "experiment",
@@ -267,14 +295,28 @@ export async function runDemo(opts: DemoOptions = {}) {
         second,
         "discard",
         "--why",
-        "No change: the edge cache already serves these pages, so a prerender saves only the first request",
+        "No change: the time goes to reading the data cache, not to rendering, so a prerender saves nothing",
       )
       await hch("experiment", "list")
+      say(
+        "A person decides the city pages are good enough at 50ms and sets a ceiling, with the reason",
+      )
+      await hch(
+        "loosen",
+        "/:country/:city#default",
+        "--max",
+        "100",
+        "--reason",
+        "Served from the data cache in about 50ms; under 100ms is good enough for a city page, and moving it to the edge cache can wait until after the switch",
+      )
+      await hch("status", "--target", "port")
+      await checkpoint("good-enough")
       say("The port now beats the lock on a cold event page: the ratchet raises the bar")
       await hch("run", "--target", "current", "--target", "port")
       await hch("ratchet")
       await hch("status", "--all")
       await hch("plan")
+      await checkpoint("done")
     },
   }
 
@@ -290,10 +332,7 @@ export async function runDemo(opts: DemoOptions = {}) {
   const switches = Object.keys(fixes)
     .map((f) => `  curl -X POST '${url.port}/__demo/fix?name=${f}&on=1'`)
     .join("\n")
-  let dashboard: { url: string; close(): Promise<void> } | undefined
-  if (opts.serve !== false) {
-    const project = openProject(dir)
-    dashboard = await serve(project, { port: opts.port ?? 4800, host: "127.0.0.1" })
+  if (dashboard) {
     print(
       [
         "",

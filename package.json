@@ -15,7 +15,7 @@
     "starters",
     "README.md",
     "GUIDE.md",
-    "docs"
+    "docs/*.md"
   ],
   "engines": {
     "node": ">=22.13"

@@ -1,8 +1,8 @@
 import { readFileSync, statSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { join } from "node:path"
-import { CONFIG_FILE, LEDGER_FILE, LOCK_FILE, readConfig, readLock } from "../config.ts"
-import type { Project } from "../project.ts"
+import { caseKey, CONFIG_FILE, LEDGER_FILE, LOCK_FILE, readConfig, readLock } from "../config.ts"
+import { casesOf, type Project } from "../project.ts"
 import { lock, loosen, ratchet } from "../ratchet.ts"
 import { readLedger } from "../ledger.ts"
 import { planOf } from "../plan.ts"
@@ -123,6 +123,12 @@ export async function serve(project: Project, opts: { port: number; host: string
       })),
     },
     status: await statusOf(project),
+    history: Object.fromEntries(
+      [...casesOf(project.lock)].map(([pattern, , id, def]) => [
+        caseKey(pattern, id),
+        def.history.filter((h) => h.by !== "lock").slice(-3),
+      ]),
+    ),
     runs: project.store.latestRuns(),
     running,
   })

@@ -101,7 +101,7 @@
       }
       main {
         padding: 16px;
-        max-width: 1400px;
+        max-width: 1880px;
         margin: 0 auto;
       }
       button,
@@ -557,7 +557,13 @@
                 ?.cases.find((c) => c.caseId === id),
             ])
             const key = per.find(([, c]) => c)?.[1]?.key
-            return `<div class="case"><h3 class="mono">#${esc(id)} <button data-lock-case="${esc(key)}" style="font-size:12px;padding:2px 8px">Re-lock from baseline…</button></h3><div class="grid">${per
+            const history = (state.history?.[key] ?? [])
+              .map(
+                (h) =>
+                  `<div>${esc(h.at.slice(0, 10))} · ${esc(h.by)} ${esc(h.field)}: ${esc(h.from ?? "–")} → ${esc(h.to ?? "–")}${h.reason ? ` · ${esc(h.reason)}` : ""}</div>`,
+              )
+              .join("")
+            return `<div class="case"><h3 class="mono">#${esc(id)} <button data-lock-case="${esc(key)}" style="font-size:12px;padding:2px 8px">Re-lock from baseline…</button></h3>${history ? `<div class="history" style="margin:0 0 8px">${history}</div>` : ""}<div class="grid">${per
               .map(([target, c]) => {
                 if (!c) return ""
                 const kind = (d) =>
