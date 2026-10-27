@@ -237,6 +237,16 @@ export class Store {
       .map((r) => toRun(r as Row))
   }
 
+  /** The newest run of each target from each vantage. */
+  latestRuns(): Run[] {
+    return this.db
+      .prepare(
+        "select * from runs where id in (select max(id) from runs group by target, vantage) order by id desc",
+      )
+      .all()
+      .map((r) => toRun(r as Row))
+  }
+
   run(id: number): Run | undefined {
     const row = this.db.prepare("select * from runs where id = ?").get(id)
     return row ? toRun(row as Row) : undefined

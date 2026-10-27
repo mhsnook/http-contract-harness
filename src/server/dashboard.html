@@ -268,6 +268,12 @@
       .detail td {
         background: var(--bg);
       }
+      /* Kept to the visible width, since the table can scroll wider than the page. */
+      .detail-body {
+        position: sticky;
+        left: 0;
+        max-width: calc(100vw - 120px);
+      }
       .case {
         margin: 6px 0 14px;
       }
@@ -582,7 +588,7 @@
               .join("")}</div></div>`
           })
           .join("")
-        return `<tr class="detail"><td colspan="${3 + state.status.length}">${body}</td></tr>`
+        return `<tr class="detail"><td colspan="${3 + state.status.length}"><div class="detail-body">${body}</div></td></tr>`
       }
 
       function render() {

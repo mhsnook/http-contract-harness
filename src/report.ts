@@ -86,10 +86,11 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
     .sort((a, b) => b.route.weight - a.route.weight || a.route.route.localeCompare(b.route.route))
 
   const lines: string[] = []
+  const labelWidth = Math.max(16, ...evals.map((e) => label(e, many).length))
   for (const e of evals) {
     const c = e.evaluation.counts
     lines.push(
-      `${pc.bold(label(e, many).padEnd(16))} ${pc.green(`${c.pass} pass`)}  ${pc.yellow(`${c.warn} warn`)}  ${pc.red(`${c.fail} fail`)}  ${pc.dim(`${c.unknown} unknown`)}`,
+      `${pc.bold(label(e, many).padEnd(labelWidth))} ${pc.green(`${c.pass} pass`)}  ${pc.yellow(`${c.warn} warn`)}  ${pc.red(`${c.fail} fail`)}  ${pc.dim(`${c.unknown} unknown`)}`,
     )
   }
   if (rows.length === 0) {
@@ -103,14 +104,13 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
   }
 
   const routeWidth = Math.min(48, Math.max(5, ...rows.map((r) => r.route.route.length)))
-  const cellWidth = Math.min(
-    60,
-    Math.max(
-      18,
-      ...evals.map((e) => label(e, many).length),
-      ...rows.flatMap((r) => r.cells.map((c) => cell(c).plain.length)),
+  const widths = evals.map((e, i) =>
+    Math.min(
+      60,
+      Math.max(label(e, many).length, ...rows.map((r) => cell(r.cells[i]).plain.length)),
     ),
   )
+
   lines.push("")
   lines.push(
     pc.dim(
@@ -118,7 +118,7 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
         "  " +
         "WEIGHT".padStart(7) +
         "  " +
-        evals.map((e) => label(e, many).padEnd(cellWidth)).join("  "),
+        evals.map((e, i) => label(e, many).padEnd(widths[i]!)).join("  "),
     ),
   )
   for (const row of rows) {
@@ -126,9 +126,7 @@ export function terminalStatus(evals: TargetEvaluation[], opts: { all?: boolean 
       row.route.route.length > routeWidth
         ? row.route.route.slice(0, routeWidth - 1) + "…"
         : row.route.route
-    const cells = row.cells
-      .map(cell)
-      .map((c) => pad(c.text, c.plain.slice(0, cellWidth), cellWidth))
+    const cells = row.cells.map(cell).map((c, i) => pad(c.text, c.plain, widths[i]!))
     lines.push(
       name.padEnd(routeWidth) +
         "  " +

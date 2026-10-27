@@ -123,7 +123,7 @@ export async function serve(project: Project, opts: { port: number; host: string
       })),
     },
     status: await statusOf(project),
-    runs: project.store.runs(15),
+    runs: project.store.latestRuns(),
     running,
   })
 
